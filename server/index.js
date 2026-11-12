@@ -12,7 +12,11 @@ const admin = require('firebase-admin');
 // ==========================================
 const PORT = process.env.PORT || 3000;
 const TB_URL = (process.env.THINGSBOARD_URL || 'https://eu.thingsboard.cloud').replace(/\/$/, '');
-const TB_USERNAME = process.env.THINGSBOARD_USERNAME;
+let TB_USERNAME = process.env.THINGSBOARD_USERNAME;
+// Auto-correct common typo if '@' was typed as 'm' before gmail.com
+if (TB_USERNAME && TB_USERNAME.includes('mgmail.com') && !TB_USERNAME.includes('@')) {
+  TB_USERNAME = TB_USERNAME.replace('mgmail.com', '@gmail.com');
+}
 const TB_PASSWORD = process.env.THINGSBOARD_PASSWORD;
 const JOB_SECRET = process.env.JOB_SECRET; // รหัสลับสำหรับ cron-job.org
 const MAX_PUMP_SECONDS = Number(process.env.MAX_PUMP_SECONDS || 10);
@@ -69,7 +73,17 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'capacitor://localhost,ht
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      if (
+        !origin ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(origin) ||
+        origin.startsWith('http://localhost') ||
+        origin.startsWith('http://127.0.0.1') ||
+        origin === 'capacitor://localhost' ||
+        origin === 'https://localhost'
+      ) {
+        return cb(null, true);
+      }
       return cb(new Error('CORS_BLOCKED'));
     }
   })
@@ -247,8 +261,18 @@ async function syncTelemetryToFirebase() {
   try {
     const snap = await db.ref('devices').once('value');
     const bSnap = await db.ref('boards').once('value');
-    const devices = { ...(bSnap.val() || {}), ...(snap.val() || {}) };
+    const boardsData = bSnap.val() || {};
+    const devicesData = snap.val() || {};
+    const devices = { ...boardsData, ...devicesData };
     for (const [name, d] of Object.entries(devices)) {
+      const fbBoard = boardsData[name] || {};
+      const fbCurrent = fbBoard.current || {};
+      const fbDev = fbBoard.device || {};
+      const fbUpdatedTs = Number(fbCurrent.updatedAt || fbDev.lastSeen || 0);
+      const now = Date.now();
+      const isFbFresh = fbUpdatedTs > 1700000000000 && (now - fbUpdatedTs <= 90000);
+      const isFbDirectOnline = Boolean(fbDev.esp32Connected === true && fbDev.wifiConnected !== false && (fbUpdatedTs === 0 || isFbFresh));
+
       let tbId = d.tbDeviceId;
       if (!tbId || tbId === name) {
         try {
@@ -259,7 +283,12 @@ async function syncTelemetryToFirebase() {
           }
         } catch (e) {}
       }
-      if (!tbId) continue;
+      if (!tbId) {
+        if (isFbDirectOnline) {
+          await db.ref(`devices/${name}/status`).set('online');
+        }
+        continue;
+      }
 
       try {
         const queryKeys = 'ph,ec,tds,temp,tank_main,tank_a,tank_b,tank_ph_down,tank_ph_up,pump_main,pump_a,pump_b,pump_ph_up,pump_ph_down,mode';
@@ -288,61 +317,73 @@ async function syncTelemetryToFirebase() {
           const parseBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
 
           if (ph !== null || ec !== null || latestTs > 0) {
-            const now = Date.now();
             // ตรวจสอบความสดใหม่ตามเกณฑ์มาตรฐาน IoT (ข้อมูลไม่เก่าเกิน 90 วินาที)
-            const isFresh = latestTs > 0 && (now - latestTs <= 90000);
+            const isTbFresh = latestTs > 0 && (now - latestTs <= 90000);
             const reportedTs = latestTs > 0 ? latestTs : now;
 
-            const currentPayload = {
-              pH: ph,
-              ec: ec,
-              tds: tds ?? (ec ? Math.round(ec * 500) : 0),
-              tempC: temp ?? 25,
-              updatedAt: reportedTs
-            };
-            const levelPayload = {
-              mainTankPercent: tankMain ?? 100,
-              fertAPercent: tankA ?? 90,
-              fertBPercent: tankB ?? 85
-            };
-            if (tankPhDown !== null) levelPayload.phDownPercent = tankPhDown;
-            if (tankPhUp !== null) levelPayload.phUpPercent = tankPhUp;
+            // หาก ThingsBoard สดใหม่และใหม่กว่าหรือเท่ากับ Firebase ให้ซิงก์ข้อมูลจาก ThingsBoard
+            if (isTbFresh && (!isFbDirectOnline || latestTs >= fbUpdatedTs)) {
+              const currentPayload = {
+                pH: ph,
+                ec: ec,
+                tds: tds ?? (ec ? Math.round(ec * 500) : 0),
+                tempC: temp ?? 25,
+                updatedAt: reportedTs
+              };
+              const levelPayload = {
+                mainTankPercent: tankMain ?? 100,
+                fertAPercent: tankA ?? 90,
+                fertBPercent: tankB ?? 85
+              };
+              if (tankPhDown !== null) levelPayload.phDownPercent = tankPhDown;
+              if (tankPhUp !== null) levelPayload.phUpPercent = tankPhUp;
 
-            const deviceStatus = {
-              esp32Connected: isFresh,
-              wifiConnected: isFresh,
-              lastSeen: reportedTs
-            };
+              const deviceStatus = {
+                esp32Connected: true,
+                wifiConnected: true,
+                lastSeen: reportedTs
+              };
 
-            // ซิงก์สถานะปั๊มจริงจากอุปกรณ์ (Reported State)
-            const pumpPayload = {};
-            if (tbData.pump_main !== undefined) pumpPayload.mainPumpOn = isFresh && parseBool(tbData.pump_main[0]?.value);
-            if (tbData.pump_a !== undefined) pumpPayload.fertPumpAOn = isFresh && parseBool(tbData.pump_a[0]?.value);
-            if (tbData.pump_b !== undefined) pumpPayload.fertPumpBOn = isFresh && parseBool(tbData.pump_b[0]?.value);
-            if (tbData.pump_ph_up !== undefined) pumpPayload.phUpPumpOn = isFresh && parseBool(tbData.pump_ph_up[0]?.value);
-            if (tbData.pump_ph_down !== undefined) pumpPayload.phDownPumpOn = isFresh && parseBool(tbData.pump_ph_down[0]?.value);
-            if (tbData.mode !== undefined) {
-              const m = String(tbData.mode[0]?.value).toUpperCase();
-              pumpPayload.controlMode = (m === 'AUTO' || m === 'MANUAL') ? m : 'MANUAL';
+              const pumpPayload = {};
+              if (tbData.pump_main !== undefined) pumpPayload.mainPumpOn = parseBool(tbData.pump_main[0]?.value);
+              if (tbData.pump_a !== undefined) pumpPayload.fertPumpAOn = parseBool(tbData.pump_a[0]?.value);
+              if (tbData.pump_b !== undefined) pumpPayload.fertPumpBOn = parseBool(tbData.pump_b[0]?.value);
+              if (tbData.pump_ph_up !== undefined) pumpPayload.phUpPumpOn = parseBool(tbData.pump_ph_up[0]?.value);
+              if (tbData.pump_ph_down !== undefined) pumpPayload.phDownPumpOn = parseBool(tbData.pump_ph_down[0]?.value);
+              if (tbData.mode !== undefined) {
+                const m = String(tbData.mode[0]?.value).toUpperCase();
+                pumpPayload.controlMode = (m === 'AUTO' || m === 'MANUAL') ? m : 'MANUAL';
+              }
+
+              await db.ref(`boards/${name}/current`).update(currentPayload);
+              await db.ref(`boards/${name}/levels`).update(levelPayload);
+              await db.ref(`boards/${name}/device`).update(deviceStatus);
+              if (Object.keys(pumpPayload).length > 0) {
+                await db.ref(`boards/${name}/pumps`).update(pumpPayload);
+              }
+              await db.ref(`devices/${name}/current`).update(currentPayload);
+              await db.ref(`devices/${name}/status`).set('online');
+            } else if (isFbDirectOnline || isFbFresh) {
+              // Dual-Channel Protection: อุปกรณ์รายงานตรงเข้า Firebase อย่างสดใหม่ ห้ามเขียนทับด้วยสถานะออฟไลน์
+              await db.ref(`devices/${name}/status`).set('online');
+            } else {
+              // ทั้งสองช่องทางเงียบหายเกิน 90 วินาที ปรับเป็นออฟไลน์อย่างปลอดภัย (Safety Offline Fallback)
+              const offlineDeviceStatus = {
+                esp32Connected: false,
+                wifiConnected: false,
+                lastSeen: Math.max(latestTs, fbUpdatedTs) || now
+              };
+              const safePumps = {
+                mainPumpOn: false,
+                fertPumpAOn: false,
+                fertPumpBOn: false,
+                phUpPumpOn: false,
+                phDownPumpOn: false
+              };
+              await db.ref(`boards/${name}/device`).update(offlineDeviceStatus);
+              await db.ref(`boards/${name}/pumps`).update(safePumps);
+              await db.ref(`devices/${name}/status`).set('offline');
             }
-
-            // หากอุปกรณ์ออฟไลน์ บังคับปิดสถานะปั๊มทั้งหมดเพื่อความปลอดภัย (Safety Offline Fallback)
-            if (!isFresh) {
-              pumpPayload.mainPumpOn = false;
-              pumpPayload.fertPumpAOn = false;
-              pumpPayload.fertPumpBOn = false;
-              pumpPayload.phUpPumpOn = false;
-              pumpPayload.phDownPumpOn = false;
-            }
-
-            await db.ref(`boards/${name}/current`).update(currentPayload);
-            await db.ref(`boards/${name}/levels`).update(levelPayload);
-            await db.ref(`boards/${name}/device`).update(deviceStatus);
-            if (Object.keys(pumpPayload).length > 0) {
-              await db.ref(`boards/${name}/pumps`).update(pumpPayload);
-            }
-            await db.ref(`devices/${name}/current`).update(currentPayload);
-            await db.ref(`devices/${name}/status`).set(isFresh ? 'online' : 'offline');
           }
         }
       } catch (err) {
