@@ -26,7 +26,12 @@ const BIND_WINDOW_MS = 10 * 60 * 1000; // ในกี่นาที
 // เพดานความปลอดภัยของค่าเป้าหมาย (แก้ที่เดียวตรงนี้)
 const SAFE_LIMITS = { ph: [4.5, 7.5], ec: [0.5, 3.5], temp: [15, 35] };
 // ชื่อคีย์ telemetry ที่อุปกรณ์ส่งขึ้น ThingsBoard (ต้องตรงกับเฟิร์มแวร์)
-const ALLOWED_KEYS = ['ph', 'ec', 'tds', 'temp', 'tank_main', 'tank_a', 'tank_b'];
+const ALLOWED_KEYS = [
+  'ph', 'ec', 'tds', 'temp',
+  'tank_main', 'tank_a', 'tank_b', 'tank_ph_down', 'tank_ph_up',
+  'pump_main', 'pump_a', 'pump_b', 'pump_ph_up', 'pump_ph_down',
+  'mode'
+];
 const PUMPS = ['main', 'A', 'B', 'phUp', 'phDown'];
 
 // ตรวจค่าที่จำเป็นก่อนเริ่ม ถ้าขาดให้เตือน
@@ -254,10 +259,19 @@ async function syncTelemetryToFirebase() {
       if (!tbId) continue;
 
       try {
+        const queryKeys = 'ph,ec,tds,temp,tank_main,tank_a,tank_b,tank_ph_down,tank_ph_up,pump_main,pump_a,pump_b,pump_ph_up,pump_ph_down,mode';
         const tbData = await tbClient('get', `/api/plugins/telemetry/DEVICE/${tbId}/values/timeseries`, {
-          params: { keys: 'ph,ec,tds,temp,tank_main,tank_a,tank_b', limit: 1 }
+          params: { keys: queryKeys, limit: 1 }
         });
         if (tbData) {
+          // ตรวจสอบ Timestamp ล่าสุดจริงจากข้อมูลที่ได้รับจาก ThingsBoard เพื่อป้องกัน Zombie Online
+          let latestTs = 0;
+          for (const pts of Object.values(tbData)) {
+            if (pts && pts[0] && pts[0].ts) {
+              latestTs = Math.max(latestTs, Number(pts[0].ts));
+            }
+          }
+
           const ph = tbData.ph?.[0]?.value !== undefined ? Number(tbData.ph[0].value) : null;
           const ec = tbData.ec?.[0]?.value !== undefined ? Number(tbData.ec[0].value) : null;
           const tds = tbData.tds?.[0]?.value !== undefined ? Number(tbData.tds[0].value) : null;
@@ -265,33 +279,67 @@ async function syncTelemetryToFirebase() {
           const tankMain = tbData.tank_main?.[0]?.value !== undefined ? Number(tbData.tank_main[0].value) : null;
           const tankA = tbData.tank_a?.[0]?.value !== undefined ? Number(tbData.tank_a[0].value) : null;
           const tankB = tbData.tank_b?.[0]?.value !== undefined ? Number(tbData.tank_b[0].value) : null;
+          const tankPhDown = tbData.tank_ph_down?.[0]?.value !== undefined ? Number(tbData.tank_ph_down[0].value) : null;
+          const tankPhUp = tbData.tank_ph_up?.[0]?.value !== undefined ? Number(tbData.tank_ph_up[0].value) : null;
 
-          if (ph !== null || ec !== null) {
+          const parseBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
+
+          if (ph !== null || ec !== null || latestTs > 0) {
             const now = Date.now();
+            // ตรวจสอบความสดใหม่ตามเกณฑ์มาตรฐาน IoT (ข้อมูลไม่เก่าเกิน 90 วินาที)
+            const isFresh = latestTs > 0 && (now - latestTs <= 90000);
+            const reportedTs = latestTs > 0 ? latestTs : now;
+
             const currentPayload = {
               pH: ph,
               ec: ec,
               tds: tds ?? (ec ? Math.round(ec * 500) : 0),
               tempC: temp ?? 25,
-              updatedAt: now
+              updatedAt: reportedTs
             };
             const levelPayload = {
               mainTankPercent: tankMain ?? 100,
               fertAPercent: tankA ?? 90,
               fertBPercent: tankB ?? 85
             };
-            const deviceStatus = { esp32Connected: true, wifiConnected: true };
+            if (tankPhDown !== null) levelPayload.phDownPercent = tankPhDown;
+            if (tankPhUp !== null) levelPayload.phUpPercent = tankPhUp;
+
+            const deviceStatus = {
+              esp32Connected: isFresh,
+              wifiConnected: isFresh,
+              lastSeen: reportedTs
+            };
+
+            // ซิงก์สถานะปั๊มจริงจากอุปกรณ์ (Reported State)
+            const pumpPayload = {};
+            if (tbData.pump_main !== undefined) pumpPayload.mainPumpOn = isFresh && parseBool(tbData.pump_main[0]?.value);
+            if (tbData.pump_a !== undefined) pumpPayload.fertPumpAOn = isFresh && parseBool(tbData.pump_a[0]?.value);
+            if (tbData.pump_b !== undefined) pumpPayload.fertPumpBOn = isFresh && parseBool(tbData.pump_b[0]?.value);
+            if (tbData.pump_ph_up !== undefined) pumpPayload.phUpPumpOn = isFresh && parseBool(tbData.pump_ph_up[0]?.value);
+            if (tbData.pump_ph_down !== undefined) pumpPayload.phDownPumpOn = isFresh && parseBool(tbData.pump_ph_down[0]?.value);
+            if (tbData.mode !== undefined) {
+              const m = String(tbData.mode[0]?.value).toUpperCase();
+              pumpPayload.controlMode = (m === 'AUTO' || m === 'MANUAL') ? m : 'MANUAL';
+            }
+
+            // หากอุปกรณ์ออฟไลน์ บังคับปิดสถานะปั๊มทั้งหมดเพื่อความปลอดภัย (Safety Offline Fallback)
+            if (!isFresh) {
+              pumpPayload.mainPumpOn = false;
+              pumpPayload.fertPumpAOn = false;
+              pumpPayload.fertPumpBOn = false;
+              pumpPayload.phUpPumpOn = false;
+              pumpPayload.phDownPumpOn = false;
+            }
 
             await db.ref(`boards/${name}/current`).update(currentPayload);
             await db.ref(`boards/${name}/levels`).update(levelPayload);
             await db.ref(`boards/${name}/device`).update(deviceStatus);
-            await db.ref(`devices/${name}/current`).update(currentPayload);
-
-            if (d.ownerUid) {
-              await db.ref(`users/${d.ownerUid}/smartWaterFarm/current`).update(currentPayload);
-              await db.ref(`users/${d.ownerUid}/smartWaterFarm/levels`).update(levelPayload);
-              await db.ref(`users/${d.ownerUid}/smartWaterFarm/device`).update(deviceStatus);
+            if (Object.keys(pumpPayload).length > 0) {
+              await db.ref(`boards/${name}/pumps`).update(pumpPayload);
             }
+            await db.ref(`devices/${name}/current`).update(currentPayload);
+            await db.ref(`devices/${name}/status`).set(isFresh ? 'online' : 'offline');
           }
         }
       } catch (err) {
@@ -680,5 +728,6 @@ module.exports = app;
 module.exports.__setTestDb = (mockDb) => { db = mockDb; };
 module.exports.__setTestAuth = (mockAuth) => { testAuth = mockAuth; };
 module.exports.__setTestTb = (mockTb) => { tbClient = mockTb; };
+module.exports.__syncTelemetryToFirebase = syncTelemetryToFirebase;
 
 
