@@ -193,12 +193,14 @@ async function requireOwner(req, res, next) {
     
     // ตรวจสอบสิทธิ์ความเป็นเจ้าของอุปกรณ์อย่างเข้มงวด (ป้องกัน BOLA - Broken Object Level Authorization)
     const userDevSnap = await db.ref(`users/${req.user.uid}/devices/${name}`).once('value');
+    const userSavedSnap = await db.ref(`users/${req.user.uid}/savedBoards/${name}`).once('value');
     const boardSnap = await db.ref(`boards/${name}/ownerUid`).once('value');
     const boardOwnerUid = boardSnap.val();
 
     const isOwner = Boolean(
       (d.ownerUid && d.ownerUid === req.user.uid) ||
       (userDevSnap.exists() && userDevSnap.val() === true) ||
+      (userSavedSnap.exists() && userSavedSnap.val() !== null) ||
       (boardOwnerUid && boardOwnerUid === req.user.uid)
     );
     
@@ -244,7 +246,8 @@ async function syncTelemetryToFirebase() {
   if (!db) return;
   try {
     const snap = await db.ref('devices').once('value');
-    const devices = snap.val() || {};
+    const bSnap = await db.ref('boards').once('value');
+    const devices = { ...(bSnap.val() || {}), ...(snap.val() || {}) };
     for (const [name, d] of Object.entries(devices)) {
       let tbId = d.tbDeviceId;
       if (!tbId || tbId === name) {
