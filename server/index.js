@@ -271,7 +271,7 @@ async function syncTelemetryToFirebase() {
       const fbUpdatedTs = Number(fbCurrent.updatedAt || fbDev.lastSeen || 0);
       const now = Date.now();
       const isFbFresh = fbUpdatedTs > 1700000000000 && (now - fbUpdatedTs <= 90000);
-      const isFbDirectOnline = Boolean(fbDev.esp32Connected === true && fbDev.wifiConnected !== false && (fbUpdatedTs === 0 || isFbFresh));
+      const isFbDirectOnline = Boolean(fbDev.esp32Connected === true && fbDev.wifiConnected !== false && isFbFresh);
 
       let tbId = d.tbDeviceId;
       if (!tbId || tbId === name) {
@@ -383,11 +383,40 @@ async function syncTelemetryToFirebase() {
               await db.ref(`boards/${name}/device`).update(offlineDeviceStatus);
               await db.ref(`boards/${name}/pumps`).update(safePumps);
               await db.ref(`devices/${name}/status`).set('offline');
+
+              // บันทึกแจ้งเตือนเมื่ออุปกรณ์เปลี่ยนสถานะเป็นออฟไลน์
+              if (fbDev.esp32Connected === true || d.status === 'online') {
+                const alertKey = `alert_offline_${Math.floor(now / 180000)}`;
+                await db.ref(`boards/${name}/alerts/${alertKey}`).set({
+                  level: 'critical',
+                  title: 'อุปกรณ์ออฟไลน์',
+                  message: `อุปกรณ์ ${name} ขาดการเชื่อมต่อเกิน 90 วินาที เซ็นเซอร์และปั๊มตัดการทำงานเพื่อความปลอดภัย`,
+                  timestamp: now,
+                  read: false
+                });
+              }
             }
           }
         }
       } catch (err) {
-        // Individual device sync error
+        // Individual device sync error: หาก ThingsBoard error และ Firebase ไม่สด ให้ตัดสถานะเป็นออฟไลน์ทันที
+        if (!isFbFresh) {
+          const offlineDeviceStatus = {
+            esp32Connected: false,
+            wifiConnected: false,
+            lastSeen: fbUpdatedTs || now
+          };
+          const safePumps = {
+            mainPumpOn: false,
+            fertPumpAOn: false,
+            fertPumpBOn: false,
+            phUpPumpOn: false,
+            phDownPumpOn: false
+          };
+          await db.ref(`boards/${name}/device`).update(offlineDeviceStatus).catch(() => {});
+          await db.ref(`boards/${name}/pumps`).update(safePumps).catch(() => {});
+          await db.ref(`devices/${name}/status`).set('offline').catch(() => {});
+        }
       }
     }
   } catch (err) {
@@ -569,10 +598,15 @@ app.get('/api/telemetry/:deviceName', verifyFirebaseUser, requireOwner, async (r
     const interval = Math.max(60000, Number(req.query.interval) || 3600000);
     Object.assign(params, { startTs: s, endTs: e, agg, limit: 1000 });
     if (agg !== 'NONE') params.interval = interval;
+  } else {
+    // เมื่อดึงค่าล่าสุด บังคับจำกัด 1 จุด เพื่อให้ได้ค่าสดใหม่ล่าสุดเสมอ (ป้องกันได้ค่าเก่าค้าง)
+    params.limit = 1;
   }
 
   try {
     const data = await tbClient('get', `/api/plugins/telemetry/DEVICE/${req.device.tbDeviceId}/values/timeseries`, { params });
+    // ทริกเกอร์การซิงก์ข้อมูลลง Firebase RTDB ทันที
+    syncTelemetryToFirebase().catch(() => {});
     res.json(data);
   } catch (err) {
     return fail(res, err, 'ดึงค่าเซนเซอร์ไม่สำเร็จ');
