@@ -270,7 +270,7 @@ async function syncTelemetryToFirebase() {
       const fbDev = fbBoard.device || {};
       const fbUpdatedTs = Number(fbCurrent.updatedAt || fbDev.lastSeen || 0);
       const now = Date.now();
-      const isFbFresh = fbUpdatedTs > 1700000000000 && (now - fbUpdatedTs <= 90000);
+      const isFbFresh = fbUpdatedTs > 1700000000000 && (now - fbUpdatedTs <= 50000);
       const isFbDirectOnline = Boolean(fbDev.esp32Connected === true && fbDev.wifiConnected !== false && isFbFresh);
 
       let tbId = d.tbDeviceId;
@@ -317,8 +317,8 @@ async function syncTelemetryToFirebase() {
           const parseBool = (v) => v === true || v === 'true' || v === 1 || v === '1';
 
           if (ph !== null || ec !== null || latestTs > 0) {
-            // ตรวจสอบความสดใหม่ตามเกณฑ์มาตรฐาน IoT (ข้อมูลไม่เก่าเกิน 90 วินาที)
-            const isTbFresh = latestTs > 0 && (now - latestTs <= 90000);
+            // ตรวจสอบความสดใหม่ตามเกณฑ์มาตรฐาน Fast & Stable IoT (ข้อมูลไม่เก่าเกิน 50 วินาที)
+            const isTbFresh = latestTs > 0 && (now - latestTs <= 50000);
             const reportedTs = latestTs > 0 ? latestTs : now;
 
             // หาก ThingsBoard สดใหม่และใหม่กว่าหรือเท่ากับ Firebase ให้ซิงก์ข้อมูลจาก ThingsBoard
@@ -367,7 +367,7 @@ async function syncTelemetryToFirebase() {
               // Dual-Channel Protection: อุปกรณ์รายงานตรงเข้า Firebase อย่างสดใหม่ ห้ามเขียนทับด้วยสถานะออฟไลน์
               await db.ref(`devices/${name}/status`).set('online');
             } else {
-              // ทั้งสองช่องทางเงียบหายเกิน 90 วินาที ปรับเป็นออฟไลน์อย่างปลอดภัย (Safety Offline Fallback)
+              // ทั้งสองช่องทางเงียบหายเกิน 50 วินาที ปรับเป็นออฟไลน์อย่างปลอดภัย (Safety Offline Fallback)
               const offlineDeviceStatus = {
                 esp32Connected: false,
                 wifiConnected: false,
@@ -390,7 +390,7 @@ async function syncTelemetryToFirebase() {
                 await db.ref(`boards/${name}/alerts/${alertKey}`).set({
                   level: 'critical',
                   title: 'อุปกรณ์ออฟไลน์',
-                  message: `อุปกรณ์ ${name} ขาดการเชื่อมต่อเกิน 90 วินาที เซ็นเซอร์และปั๊มตัดการทำงานเพื่อความปลอดภัย`,
+                  message: `อุปกรณ์ ${name} ขาดการเชื่อมต่อเกิน 50 วินาที เซ็นเซอร์และปั๊มตัดการทำงานเพื่อความปลอดภัย`,
                   timestamp: now,
                   read: false
                 });
