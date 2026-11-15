@@ -751,7 +751,12 @@ app.get('/api/telemetry/:deviceName', verifyFirebaseUser, requireOwner, async (r
       return res.status(400).json({ error: 'ช่วงเวลาไม่ถูกต้อง (ไม่เกิน 120 วัน)' });
     }
     const agg = ['NONE', 'AVG', 'MIN', 'MAX'].includes(req.query.agg) ? req.query.agg : 'AVG';
-    const interval = Math.max(60000, Number(req.query.interval) || 3600000);
+    let interval = Number(req.query.interval) || 3600000;
+    // ป้องกัน ThingsBoard Aggregation Error เมื่อจำนวนช่วงเวลาเกิน 480 จุด
+    if (agg !== 'NONE' && (e - s) / interval > 480) {
+      interval = Math.ceil((e - s) / 480);
+    }
+    interval = Math.max(60000, interval);
     Object.assign(params, { startTs: s, endTs: e, agg, limit: 1000 });
     if (agg !== 'NONE') params.interval = interval;
   } else {
