@@ -699,16 +699,19 @@ app.post('/api/bind-device', verifyFirebaseUser, async (req, res) => {
     await db.ref('/').update(updates);
     await db.ref(`rateLimits/bind/${uid}`).remove();
 
-    // Clean baseline for boards/${deviceName} to prevent ghost data from previous sessions
-    await db.ref(`boards/${deviceName}`).update({
+    // Check if board already has an active plant profile from a previous or ongoing cycle
+    let hasExistingPlant = false;
+    const currentBoardSnap = await db.ref(`boards/${deviceName}`).once('value');
+    if (currentBoardSnap.exists()) {
+      const val = currentBoardSnap.val();
+      if (val && val.plantType && typeof val.plantType === 'string' && val.plantType.trim().length > 0) {
+        hasExistingPlant = true;
+      }
+    }
+
+    const boardUpdate = {
       ownerUid: uid,
       status: 'claimed',
-      plantType: null,
-      plantingStartDate: null,
-      expectedHarvestDays: null,
-      targets: null,
-      aiMemory: null,
-      alerts: null,
       pumps: {
         mainPumpOn: false,
         fertPumpAOn: false,
@@ -717,13 +720,27 @@ app.post('/api/bind-device', verifyFirebaseUser, async (req, res) => {
         phDownPumpOn: false,
         controlMode: 'MANUAL'
       }
-    });
-    await db.ref(`boards/${deviceName}/plantType`).remove();
-    await db.ref(`boards/${deviceName}/plantingStartDate`).remove();
-    await db.ref(`boards/${deviceName}/expectedHarvestDays`).remove();
-    await db.ref(`boards/${deviceName}/targets`).remove();
-    await db.ref(`boards/${deviceName}/aiMemory`).remove();
-    await db.ref(`boards/${deviceName}/alerts`).remove();
+    };
+
+    if (!hasExistingPlant) {
+      boardUpdate.plantType = null;
+      boardUpdate.plantingStartDate = null;
+      boardUpdate.expectedHarvestDays = null;
+      boardUpdate.targets = null;
+      boardUpdate.aiMemory = null;
+      boardUpdate.alerts = null;
+    }
+
+    await db.ref(`boards/${deviceName}`).update(boardUpdate);
+
+    if (!hasExistingPlant) {
+      await db.ref(`boards/${deviceName}/plantType`).remove();
+      await db.ref(`boards/${deviceName}/plantingStartDate`).remove();
+      await db.ref(`boards/${deviceName}/expectedHarvestDays`).remove();
+      await db.ref(`boards/${deviceName}/targets`).remove();
+      await db.ref(`boards/${deviceName}/aiMemory`).remove();
+      await db.ref(`boards/${deviceName}/alerts`).remove();
+    }
 
     res.json({ success: true, deviceName });
   } catch (err) {
@@ -812,7 +829,8 @@ const ALLOWED_RPC = {
   setMode: (p) => ['AUTO', 'MANUAL'].includes(p && p.mode),
   reboot: () => true,
   resetWifi: () => true,
-  factoryReset: () => true
+  factoryReset: () => true,
+  unbind: () => true
 };
 
 function validateTargets(attrs) {
@@ -856,6 +874,20 @@ app.post('/api/command/:deviceName', verifyFirebaseUser, requireOwner, async (re
     }
     if (method) {
       await tbClient('post', `/api/plugins/rpc/oneway/${id}`, { data: { method, params } });
+    }
+    if (method === 'unbind' && db) {
+      const name = req.device.name;
+      const uid = req.user.uid;
+      await db.ref(`boards/${name}`).update({
+        ownerUid: null,
+        status: 'unbound',
+        updatedAt: Date.now()
+      });
+      await db.ref(`devices/${name}/ownerUid`).remove();
+      await db.ref(`devices/${name}/farmId`).remove();
+      await db.ref(`devices/${name}/status`).set('unclaimed');
+      await db.ref(`users/${uid}/savedBoards/${name}`).remove();
+      await db.ref(`users/${uid}/devices/${name}`).remove();
     }
     if (method === 'factoryReset' && db) {
       const name = req.device.name;
