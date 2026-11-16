@@ -692,9 +692,38 @@ app.post('/api/bind-device', verifyFirebaseUser, async (req, res) => {
     }
 
     const updates = { [`users/${uid}/devices/${deviceName}`]: true };
-    if (prevOwner && prevOwner !== uid) updates[`users/${prevOwner}/devices/${deviceName}`] = null;
-    await db.ref().update(updates);
+    if (prevOwner && prevOwner !== uid) {
+      updates[`users/${prevOwner}/devices/${deviceName}`] = null;
+      updates[`users/${prevOwner}/savedBoards/${deviceName}`] = null;
+    }
+    await db.ref('/').update(updates);
     await db.ref(`rateLimits/bind/${uid}`).remove();
+
+    // Clean baseline for boards/${deviceName} to prevent ghost data from previous sessions
+    await db.ref(`boards/${deviceName}`).update({
+      ownerUid: uid,
+      status: 'claimed',
+      plantType: null,
+      plantingStartDate: null,
+      expectedHarvestDays: null,
+      targets: null,
+      aiMemory: null,
+      alerts: null,
+      pumps: {
+        mainPumpOn: false,
+        fertPumpAOn: false,
+        fertPumpBOn: false,
+        phUpPumpOn: false,
+        phDownPumpOn: false,
+        controlMode: 'MANUAL'
+      }
+    });
+    await db.ref(`boards/${deviceName}/plantType`).remove();
+    await db.ref(`boards/${deviceName}/plantingStartDate`).remove();
+    await db.ref(`boards/${deviceName}/expectedHarvestDays`).remove();
+    await db.ref(`boards/${deviceName}/targets`).remove();
+    await db.ref(`boards/${deviceName}/aiMemory`).remove();
+    await db.ref(`boards/${deviceName}/alerts`).remove();
 
     res.json({ success: true, deviceName });
   } catch (err) {
@@ -827,6 +856,47 @@ app.post('/api/command/:deviceName', verifyFirebaseUser, requireOwner, async (re
     }
     if (method) {
       await tbClient('post', `/api/plugins/rpc/oneway/${id}`, { data: { method, params } });
+    }
+    if (method === 'factoryReset' && db) {
+      const name = req.device.name;
+      const uid = req.user.uid;
+      const cleanBoardState = {
+        ownerUid: null,
+        status: 'unbound',
+        plantType: null,
+        plantingStartDate: null,
+        expectedHarvestDays: null,
+        targets: null,
+        aiMemory: null,
+        alerts: null,
+        pumps: {
+          mainPumpOn: false,
+          fertPumpAOn: false,
+          fertPumpBOn: false,
+          phUpPumpOn: false,
+          phDownPumpOn: false,
+          controlMode: 'MANUAL'
+        },
+        device: {
+          esp32Connected: false,
+          wifiConnected: false,
+          lastSeen: Date.now()
+        },
+        updatedAt: Date.now()
+      };
+      await db.ref(`boards/${name}`).update(cleanBoardState);
+      await db.ref(`boards/${name}/plantType`).remove();
+      await db.ref(`boards/${name}/plantingStartDate`).remove();
+      await db.ref(`boards/${name}/expectedHarvestDays`).remove();
+      await db.ref(`boards/${name}/targets`).remove();
+      await db.ref(`boards/${name}/aiMemory`).remove();
+      await db.ref(`boards/${name}/alerts`).remove();
+      await db.ref(`history/${name}`).remove();
+      await db.ref(`devices/${name}/ownerUid`).remove();
+      await db.ref(`devices/${name}/farmId`).remove();
+      await db.ref(`devices/${name}/status`).set('unclaimed');
+      await db.ref(`users/${uid}/savedBoards/${name}`).remove();
+      await db.ref(`users/${uid}/devices/${name}`).remove();
     }
     res.json({ success: true });
   } catch (err) {
