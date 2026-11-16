@@ -701,11 +701,48 @@ app.post('/api/bind-device', verifyFirebaseUser, async (req, res) => {
 
     // Check if board already has an active plant profile from a previous or ongoing cycle
     let hasExistingPlant = false;
+    let existingPlantType = null;
+    let existingPlantingDate = null;
+    let existingHarvestDays = null;
+    let existingTargets = null;
+
     const currentBoardSnap = await db.ref(`boards/${deviceName}`).once('value');
     if (currentBoardSnap.exists()) {
       const val = currentBoardSnap.val();
       if (val && val.plantType && typeof val.plantType === 'string' && val.plantType.trim().length > 0) {
         hasExistingPlant = true;
+        existingPlantType = val.plantType;
+        existingPlantingDate = val.plantingStartDate;
+        existingHarvestDays = val.expectedHarvestDays;
+        existingTargets = val.targets;
+      }
+    }
+
+    // Fallback: หากบน boards ยังไม่มี ให้ตรวจดูที่ crops/${farmId}/${cropId} จาก seed data
+    if (!hasExistingPlant) {
+      const devSnap = await db.ref(`devices/${deviceName}`).once('value');
+      if (devSnap.exists()) {
+        const devVal = devSnap.val() || {};
+        const fId = devVal.farmId || 'farm_001';
+        const cId = devVal.cropId || 'crop_001';
+        const cropSnap = await db.ref(`crops/${fId}/${cId}`).once('value');
+        if (cropSnap.exists()) {
+          const cropVal = cropSnap.val() || {};
+          if (cropVal.cropName || cropVal.plantType) {
+            hasExistingPlant = true;
+            existingPlantType = cropVal.cropName || cropVal.plantType;
+            existingPlantingDate = cropVal.startDate || Date.now();
+            existingHarvestDays = cropVal.harvestDays || 45;
+            existingTargets = {
+              phMin: cropVal.targetPhMin || 5.8,
+              phMax: cropVal.targetPhMax || 6.5,
+              ecMin: cropVal.targetEcMin || 1.2,
+              ecMax: cropVal.targetEcMax || 2.0,
+              tempMin: cropVal.targetTempMin || 22.0,
+              tempMax: cropVal.targetTempMax || 28.0,
+            };
+          }
+        }
       }
     }
 
@@ -722,7 +759,12 @@ app.post('/api/bind-device', verifyFirebaseUser, async (req, res) => {
       }
     };
 
-    if (!hasExistingPlant) {
+    if (hasExistingPlant) {
+      boardUpdate.plantType = existingPlantType;
+      boardUpdate.plantingStartDate = existingPlantingDate;
+      boardUpdate.expectedHarvestDays = existingHarvestDays;
+      if (existingTargets) boardUpdate.targets = existingTargets;
+    } else {
       boardUpdate.plantType = null;
       boardUpdate.plantingStartDate = null;
       boardUpdate.expectedHarvestDays = null;
@@ -733,7 +775,13 @@ app.post('/api/bind-device', verifyFirebaseUser, async (req, res) => {
 
     await db.ref(`boards/${deviceName}`).update(boardUpdate);
 
-    if (!hasExistingPlant) {
+    if (hasExistingPlant) {
+      await db.ref(`users/${uid}/savedBoards/${deviceName}`).update({
+        plantType: existingPlantType,
+        plantingStartDate: existingPlantingDate,
+        expectedHarvestDays: existingHarvestDays
+      });
+    } else {
       await db.ref(`boards/${deviceName}/plantType`).remove();
       await db.ref(`boards/${deviceName}/plantingStartDate`).remove();
       await db.ref(`boards/${deviceName}/expectedHarvestDays`).remove();
@@ -873,7 +921,12 @@ app.post('/api/command/:deviceName', verifyFirebaseUser, requireOwner, async (re
       await tbClient('post', `/api/plugins/telemetry/DEVICE/${id}/SHARED_SCOPE`, { data: targets });
     }
     if (method) {
-      await tbClient('post', `/api/plugins/rpc/oneway/${id}`, { data: { method, params } });
+      try {
+        await tbClient('post', `/api/plugins/rpc/oneway/${id}`, { data: { method, params } });
+      } catch (rpcErr) {
+        console.warn(`[RPC] ThingsBoard RPC failed for device ${id}:`, rpcErr.message || rpcErr);
+        if (method !== 'unbind' && method !== 'factoryReset') throw rpcErr;
+      }
     }
     if (method === 'unbind' && db) {
       const name = req.device.name;
