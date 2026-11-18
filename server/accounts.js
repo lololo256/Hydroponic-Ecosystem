@@ -5,9 +5,11 @@
  *   POST /api/account/signup/google  { idToken, password, firstName? }   -> { success: true, email }
  *
  * The server uses its tenant-admin login (Render env) to create, in ThingsBoard Cloud, a CUSTOMER_USER
- * inside ONE existing shared customer (SIGNUP_CUSTOMER_TITLE, default "Hydroponic"), activated with the
- * password the user chose. (ThingsBoard Cloud Free plan: max 2 customers / 5 users, so a customer per
- * person is not possible; members of the shared customer see the same devices.)
+ * inside ONE existing shared customer (SIGNUP_CUSTOMER_TITLE, default "Hydroponic", because the Free plan
+ * allows only 2 customers / 5 users), puts the user in a private user group that can only see the
+ * device group "Devices <email>" (roles "Farm Member" + "Farm Device Owner"), and activates the account
+ * with the password the user chose. A Root Rule Chain step moves a device into its owner's group when
+ * the app writes the shared attribute bind_owner.
  * The app then logs in DIRECTLY to ThingsBoard (/api/auth/login) with that e-mail + password.
  * "Google" sign-up only proves the e-mail address belongs to the user; the account still uses a password.
  */
@@ -73,6 +75,8 @@ function createAccountService({
   fetchGoogleTokenInfo,
   googleClientIds = DEFAULT_GOOGLE_CLIENT_IDS,
   sharedCustomerTitle = DEFAULT_SIGNUP_CUSTOMER,
+  memberRoleName = 'Farm Member',
+  ownerRoleName = 'Farm Device Owner',
 }) {
   async function verifyGoogleIdToken(idToken) {
     if (!idToken || typeof idToken !== 'string' || idToken.length > 4096) {
@@ -110,45 +114,67 @@ function createAccountService({
     }
   }
 
-  /** User groups of the shared customer (ThingsBoard PE). Returns [] on CE, where groups do not exist. */
-  async function listCustomerUserGroups(customerId) {
-    try {
-      const groups = await tb('get', `/api/entityGroups/CUSTOMER/${customerId}/USER`);
-      return Array.isArray(groups) ? groups : groups?.data || [];
-    } catch (_) {
-      return [];
+  async function listGroups(customerId, type) {
+    const groups = await tb('get', `/api/entityGroups/CUSTOMER/${customerId}/${type}`);
+    return Array.isArray(groups) ? groups : groups?.data || [];
+  }
+
+  async function ensureGroup(customerId, name, type) {
+    const existing = (await listGroups(customerId, type)).find((g) => g.name === name);
+    if (existing) return existing;
+    return tb('post', '/api/entityGroup', { data: { name, type, ownerId: { entityType: 'CUSTOMER', id: customerId } } });
+  }
+
+  let roleCache = null;
+  async function findRoles() {
+    if (roleCache) return roleCache;
+    const page = await tb('get', '/api/roles', { params: { pageSize: 100, page: 0 } });
+    const list = page?.data || [];
+    const member = list.find((r) => r.name === memberRoleName);
+    const owner = list.find((r) => r.name === ownerRoleName);
+    if (!member || !owner) {
+      throw Object.assign(
+        new AccountError(500, 'SIGNUP_ROLES_MISSING', `Roles "${memberRoleName}" / "${ownerRoleName}" not found`),
+        { stage: 'find_roles' }
+      );
     }
+    roleCache = { member, owner };
+    return roleCache;
   }
 
   /**
-   * Picks the user group for a new member: the same group an existing member of the customer is in
-   * (so new users get exactly the permissions that already work, e.g. claiming devices), otherwise
-   * "Customer Users". Never "All" and never "Customer Administrators" (a shared customer must not
-   * let members manage each other).
+   * Per-user privacy inside the shared customer (ThingsBoard PE RBAC, works on the Free plan):
+   *   user group  "Users <email>"   -> generic role "Farm Member" (claim devices, set bind_owner, read alarms)
+   *                                 -> group role "Farm Device Owner" on device group "Devices <email>"
+   * The Root Rule Chain moves a device into "Devices <bind_owner>" when the app writes bind_owner,
+   * so each user sees and controls only their own devices.
    */
-  async function pickUserGroupId(customerId) {
-    const groups = await listCustomerUserGroups(customerId);
-    if (!groups.length) return null;
-    const usable = groups.filter((g) => !/^all$/i.test(g.name || '') && !/administrators/i.test(g.name || ''));
-    try {
-      const members = await tb('get', `/api/customer/${customerId}/users`, { params: { pageSize: 1, page: 0 } });
-      const existing = members?.data?.[0];
-      if (existing?.id?.id) {
-        const memberOf = await tb('get', `/api/entityGroups/USER/${existing.id.id}`);
-        const ids = (Array.isArray(memberOf) ? memberOf : []).map((g) => g?.id || g?.id?.id || g);
-        const match = usable.find((g) => ids.includes(g.id?.id));
-        if (match) return match.id.id;
-      }
-    } catch (_) {
-      /* fall back to the default group below */
+  async function setUpPrivateGroups(customerId, email, userId) {
+    const { member, owner } = await step('find_roles', () => findRoles());
+    const userGroup = await step('user_group', () => ensureGroup(customerId, `Users ${email}`, 'USER'));
+    const deviceGroup = await step('device_group', () => ensureGroup(customerId, `Devices ${email}`, 'DEVICE'));
+    const perms = await step('permissions', () => tb('get', `/api/userGroup/${userGroup.id.id}/groupPermissions`));
+    const has = (roleId, groupId) =>
+      (Array.isArray(perms) ? perms : []).some(
+        (p) => (p.roleId?.id || p.role?.id?.id) === roleId && (p.entityGroupId?.id || null) === groupId
+      );
+    if (!has(member.id.id, null)) {
+      await step('permissions', () => tb('post', '/api/groupPermission', { data: { roleId: member.id, userGroupId: userGroup.id } }));
     }
-    return (usable.find((g) => /customer users/i.test(g.name || '')) || usable[0])?.id?.id || null;
+    if (!has(owner.id.id, deviceGroup.id.id)) {
+      await step('permissions', () =>
+        tb('post', '/api/groupPermission', {
+          data: { roleId: owner.id, userGroupId: userGroup.id, entityGroupId: deviceGroup.id, entityGroupType: 'DEVICE' },
+        })
+      );
+    }
+    await step('join_group', () => tb('post', `/api/entityGroup/${userGroup.id.id}/addEntities`, { data: [userId] }));
   }
 
   /**
-   * Creates the user inside the shared customer and activates it with the user's password.
-   * ThingsBoard Cloud's Free plan allows only 2 customers / 5 users, so every self-registered user
-   * joins ONE existing customer (SIGNUP_CUSTOMER_TITLE, default "Hydroponic") instead of getting their own.
+   * Creates the user inside the shared customer (ThingsBoard Cloud Free plan: max 2 customers / 5 users,
+   * so every self-registered user joins ONE existing customer, SIGNUP_CUSTOMER_TITLE, default "Hydroponic"),
+   * gives the user private groups/permissions, and activates it with the user's password.
    */
   async function createAccount({ email, password, firstName, lastName }) {
     const customer = await step('find_customer', () => findCustomer(sharedCustomerTitle));
@@ -157,9 +183,8 @@ function createAccountService({
         stage: 'find_customer',
       });
     }
-    const groupId = await step('find_group', () => pickUserGroupId(customer.id.id));
+    await findRoles(); // fail early (before creating anything) if the roles are not configured
     const params = { sendActivationMail: false };
-    if (groupId) params.entityGroupId = groupId;
 
     let user;
     try {
@@ -189,6 +214,7 @@ function createAccountService({
     }
 
     try {
+      await setUpPrivateGroups(customer.id.id, email, user.id.id);
       const link = await step('activation_link', () => tb('get', `/api/user/${user.id.id}/activationLink`));
       const activateToken = extractActivateToken(link);
       // ThingsBoard answers with a session for the new user; the middle server deliberately discards it.
