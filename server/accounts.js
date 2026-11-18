@@ -4,9 +4,10 @@
  *   POST /api/account/signup         { email, password, firstName? }     -> { success: true, email }
  *   POST /api/account/signup/google  { idToken, password, firstName? }   -> { success: true, email }
  *
- * The server uses its tenant-admin login (Render env) to create, in ThingsBoard Cloud:
- *   - a Customer titled with the user's e-mail (one customer per person -> users never see each other's devices)
- *   - a CUSTOMER_USER in that customer, activated with the password the user chose.
+ * The server uses its tenant-admin login (Render env) to create, in ThingsBoard Cloud, a CUSTOMER_USER
+ * inside ONE existing shared customer (SIGNUP_CUSTOMER_TITLE, default "Hydroponic"), activated with the
+ * password the user chose. (ThingsBoard Cloud Free plan: max 2 customers / 5 users, so a customer per
+ * person is not possible; members of the shared customer see the same devices.)
  * The app then logs in DIRECTLY to ThingsBoard (/api/auth/login) with that e-mail + password.
  * "Google" sign-up only proves the e-mail address belongs to the user; the account still uses a password.
  */
@@ -15,6 +16,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 
 const DEFAULT_GOOGLE_CLIENT_IDS = ['175572736060-u745g13ng16ovfh2sm0rcs875koh1kun.apps.googleusercontent.com'];
+const DEFAULT_SIGNUP_CUSTOMER = 'Hydroponic';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 class AccountError extends Error {
@@ -53,6 +55,7 @@ function cleanName(firstName, fallback) {
  * @param {(method:string, path:string, opts?:{params?:object,data?:any}) => Promise<any>} deps.tbNoAuth  unauthenticated ThingsBoard call
  * @param {(idToken:string) => Promise<object>} deps.fetchGoogleTokenInfo  Google tokeninfo lookup
  * @param {string[]} [deps.googleClientIds]
+ * @param {string} [deps.sharedCustomerTitle]  existing customer every new user joins (Free plan limit)
  */
 /** Tags a ThingsBoard failure with the step it happened in, so the app/logs can say where it broke. */
 async function step(name, fn) {
@@ -64,7 +67,13 @@ async function step(name, fn) {
   }
 }
 
-function createAccountService({ tb, tbNoAuth, fetchGoogleTokenInfo, googleClientIds = DEFAULT_GOOGLE_CLIENT_IDS }) {
+function createAccountService({
+  tb,
+  tbNoAuth,
+  fetchGoogleTokenInfo,
+  googleClientIds = DEFAULT_GOOGLE_CLIENT_IDS,
+  sharedCustomerTitle = DEFAULT_SIGNUP_CUSTOMER,
+}) {
   async function verifyGoogleIdToken(idToken) {
     if (!idToken || typeof idToken !== 'string' || idToken.length > 4096) {
       throw new AccountError(400, 'INVALID_INPUT', 'idToken is required');
@@ -101,56 +110,80 @@ function createAccountService({ tb, tbNoAuth, fetchGoogleTokenInfo, googleClient
     }
   }
 
-  async function findCustomerAdminGroupId(customerId) {
+  /** User groups of the shared customer (ThingsBoard PE). Returns [] on CE, where groups do not exist. */
+  async function listCustomerUserGroups(customerId) {
     try {
       const groups = await tb('get', `/api/entityGroups/CUSTOMER/${customerId}/USER`);
-      const list = Array.isArray(groups) ? groups : groups?.data || [];
-      const g =
-        list.find((x) => /customer administrators/i.test(x.name || '')) ||
-        list.find((x) => /customer users/i.test(x.name || ''));
-      return g?.id?.id || null;
+      return Array.isArray(groups) ? groups : groups?.data || [];
     } catch (_) {
-      return null; // ThingsBoard CE has no entity groups; a plain CUSTOMER_USER is fine there
+      return [];
     }
   }
 
-  /** Creates customer + user and activates it with the user's password. Duplicate e-mail -> 409. */
-  async function createAccount({ email, password, firstName, lastName }) {
-    let customer = await step('find_customer', () => findCustomer(email));
-    let createdCustomer = false;
-    if (!customer) {
-      customer = await step('create_customer', () => tb('post', '/api/customer', { data: { title: email, email } }));
-      createdCustomer = true;
-    }
-    const removeOrphanCustomer = async () => {
-      if (!createdCustomer) return;
-      try {
-        await tb('delete', `/api/customer/${customer.id.id}`);
-      } catch (_) {
-        /* best effort */
+  /**
+   * Picks the user group for a new member: the same group an existing member of the customer is in
+   * (so new users get exactly the permissions that already work, e.g. claiming devices), otherwise
+   * "Customer Users". Never "All" and never "Customer Administrators" (a shared customer must not
+   * let members manage each other).
+   */
+  async function pickUserGroupId(customerId) {
+    const groups = await listCustomerUserGroups(customerId);
+    if (!groups.length) return null;
+    const usable = groups.filter((g) => !/^all$/i.test(g.name || '') && !/administrators/i.test(g.name || ''));
+    try {
+      const members = await tb('get', `/api/customer/${customerId}/users`, { params: { pageSize: 1, page: 0 } });
+      const existing = members?.data?.[0];
+      if (existing?.id?.id) {
+        const memberOf = await tb('get', `/api/entityGroups/USER/${existing.id.id}`);
+        const ids = (Array.isArray(memberOf) ? memberOf : []).map((g) => g?.id || g?.id?.id || g);
+        const match = usable.find((g) => ids.includes(g.id?.id));
+        if (match) return match.id.id;
       }
-    };
-    const groupId = await findCustomerAdminGroupId(customer.id.id);
+    } catch (_) {
+      /* fall back to the default group below */
+    }
+    return (usable.find((g) => /customer users/i.test(g.name || '')) || usable[0])?.id?.id || null;
+  }
+
+  /**
+   * Creates the user inside the shared customer and activates it with the user's password.
+   * ThingsBoard Cloud's Free plan allows only 2 customers / 5 users, so every self-registered user
+   * joins ONE existing customer (SIGNUP_CUSTOMER_TITLE, default "Hydroponic") instead of getting their own.
+   */
+  async function createAccount({ email, password, firstName, lastName }) {
+    const customer = await step('find_customer', () => findCustomer(sharedCustomerTitle));
+    if (!customer) {
+      throw Object.assign(new AccountError(500, 'SIGNUP_CUSTOMER_MISSING', `Customer "${sharedCustomerTitle}" not found`), {
+        stage: 'find_customer',
+      });
+    }
+    const groupId = await step('find_group', () => pickUserGroupId(customer.id.id));
     const params = { sendActivationMail: false };
     if (groupId) params.entityGroupId = groupId;
 
     let user;
     try {
-      user = await step('create_user', () => tb('post', '/api/user', {
-        params,
-        data: {
-          email,
-          authority: 'CUSTOMER_USER',
-          customerId: { entityType: 'CUSTOMER', id: customer.id.id },
-          firstName: cleanName(firstName, email.split('@')[0]),
-          lastName: lastName || '',
-        },
-      }));
+      user = await step('create_user', () =>
+        tb('post', '/api/user', {
+          params,
+          data: {
+            email,
+            authority: 'CUSTOMER_USER',
+            customerId: { entityType: 'CUSTOMER', id: customer.id.id },
+            firstName: cleanName(firstName, email.split('@')[0]),
+            lastName: lastName || '',
+          },
+        })
+      );
     } catch (err) {
-      await removeOrphanCustomer();
+      const status = err?.response?.status;
       const msg = String(err?.response?.data?.message || '');
-      if (err?.response?.status === 400 && /already|exist|duplicate|in use/i.test(msg)) {
+      if (status === 400 && /already|exist|duplicate|in use/i.test(msg)) {
         throw new AccountError(409, 'EMAIL_EXISTS', 'An account with this e-mail already exists');
+      }
+      if (status === 403 && !/permission|authority|not allowed to perform/i.test(msg)) {
+        // Plan limit (Free plan: 5 users) — ThingsBoard rejects new users with 403.
+        throw new AccountError(403, 'USER_LIMIT_REACHED', 'ThingsBoard plan user limit reached');
       }
       throw err;
     }
@@ -172,7 +205,6 @@ function createAccountService({ tb, tbNoAuth, fetchGoogleTokenInfo, googleClient
       } catch (_) {
         /* best effort */
       }
-      await removeOrphanCustomer();
       throw err;
     }
     return { success: true, email };
@@ -200,7 +232,10 @@ function createAccountService({ tb, tbNoAuth, fetchGoogleTokenInfo, googleClient
 }
 
 function sendError(res, err) {
-  if (err instanceof AccountError) return res.status(err.status).json({ error: err.code });
+  if (err instanceof AccountError) {
+    if (err.status >= 500) console.error('[accounts] config error:', err.code, err.message);
+    return res.status(err.status).json({ error: err.code });
+  }
   const tbStatus = err?.response?.status;
   const tbMsg = String(err?.response?.data?.message || '');
   if (tbStatus === 400 && /password/i.test(tbMsg)) return res.status(400).json({ error: 'WEAK_PASSWORD' });
