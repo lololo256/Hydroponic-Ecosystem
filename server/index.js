@@ -12,6 +12,7 @@
  *   THINGSBOARD_PASSWORD  tenant administrator password
  *   GOOGLE_CLIENT_IDS     optional, comma separated Google OAuth client IDs accepted for Google sign-up
  *   ALLOWED_ORIGINS       optional, extra CORS origins (comma separated)
+ *   SIGNUP_CUSTOMER_TITLE optional, existing customer new users join (default "Hydroponic")
  */
 require('dotenv').config();
 const express = require('express');
@@ -46,9 +47,15 @@ async function tbHeaders(force = false) {
     .finally(() => {
       loginInFlight = null;
     });
-  const r = await loginInFlight;
+  let r;
+  try {
+    r = await loginInFlight;
+  } catch (err) {
+    err.stage = 'admin_login';
+    throw err;
+  }
   if (r.data?.scope === 'PRE_VERIFICATION_TOKEN') {
-    throw new Error('TB_2FA_ENABLED: turn off two-factor authentication for the server account');
+    throw Object.assign(new Error('TB_2FA_ENABLED: turn off two-factor authentication for the server account'), { stage: 'admin_login' });
   }
   tbJwt = r.data.token;
   tbJwtExpireAt = Date.now() + 45 * 60 * 1000;
@@ -107,9 +114,23 @@ app.use(
 app.use(express.json({ limit: '10kb' }));
 app.use(rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false }));
 
-// Health check / keep-alive target (cron-job.org can ping this; no secret needed)
-app.get(['/', '/api/health'], (req, res) => {
-  res.json({ ok: true, service: 'hydroponic-signup', time: new Date().toISOString() });
+// Health check / keep-alive target (cron-job.org can ping this; no secret needed).
+// /api/health?deep=1 also checks that the tenant-admin login to ThingsBoard works (reports only ok / HTTP status).
+app.get(['/', '/api/health'], async (req, res) => {
+  const body = { ok: true, service: 'hydroponic-signup', time: new Date().toISOString() };
+  if (req.query.deep === '1') {
+    body.config = { tbUrl: TB_URL, hasUsername: Boolean(TB_USERNAME), hasPassword: Boolean(TB_PASSWORD) };
+    try {
+      await tbHeaders(true);
+      body.tbAdminLogin = 'ok';
+    } catch (err) {
+      body.ok = false;
+      body.tbAdminLogin = String(err?.message || '').startsWith('TB_2FA')
+        ? 'failed: 2FA enabled on the server account'
+        : `failed: HTTP ${err?.response?.status || 'no response'}`;
+    }
+  }
+  res.status(body.ok ? 200 : 503).json(body);
 });
 
 let accountService = createAccountService({
@@ -119,6 +140,7 @@ let accountService = createAccountService({
   googleClientIds: process.env.GOOGLE_CLIENT_IDS
     ? process.env.GOOGLE_CLIENT_IDS.split(',').map((s) => s.trim()).filter(Boolean)
     : undefined,
+  sharedCustomerTitle: process.env.SIGNUP_CUSTOMER_TITLE || undefined,
 });
 app.use('/api/account', createAccountRouter({
   signUpWithEmail: (body) => accountService.signUpWithEmail(body),
