@@ -20,11 +20,7 @@
 | --- | --- |
 | ชื่อทีม | ธุรกิจพันล้าน |
 | ชื่อโครงงาน | Hydroponic Ecosystem |
-| แนวคิดของโครงงาน | https://canva.link/tmarpsmls3yy1ou |
-| วิดีโอนำเสนอ | https://canva.link/elkdajn94bxd70i |
-| GitHub firmware | [firmware/smart_water_farm_esp32](firmware/smart_water_farm_esp32) |
-| GitHub application | [Application](Application) |
-| Application deployment URL | https://lololo256.github.io/Hydroponic-Ecosystem/ |
+
 
 ### สมาชิก
 
