@@ -53,7 +53,7 @@ ThingsBoard Cloud (EU) ── Rule Chain: แจ้งเตือนเมื�
 | โฟลเดอร์ | เนื้อหา |
 | --- | --- |
 | [Application](Application) | แอปมือถือ React + TypeScript + Capacitor (`src/`, `android/`, `ios/`) และ Firebase rules |
-| [firmware/smart_water_farm_esp32](firmware/smart_water_farm_esp32) | เฟิร์มแวร์บอร์ด ESP32-S3 (Arduino) — คัดลอก `secrets.example.h` เป็น `secrets.h` แล้วใส่ token ของบอร์ด |
+| [firmware](firmware) | [smart_water_farm_esp32](firmware/smart_water_farm_esp32) เฟิร์มแวร์บอร์ด ESP32-S3 (Arduino) — คัดลอก `secrets.example.h` เป็น `secrets.h` แล้วใส่ token ของบอร์ด และ [Schematic_Hydroponic.pdf](firmware/Schematic_Hydroponic.pdf) วงจรของบอร์ด |
 | [server](server) | เซิร์ฟเวอร์ Node.js บน Render สำหรับสมัครบัญชี |
 | [docs](docs) | หน้าดาวน์โหลดแอป (GitHub Pages) และไฟล์ APK |
 
