@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hydroponic</string>
+    <string name="title_activity_main">Hydroponic</string>
+    <string name="package_name">com.hydroponic.ecosystem</string>
+    <string name="custom_url_scheme">com.hydroponic.ecosystem</string>
+    <string name="default_web_client_id">175572736060-u745g13ng16ovfh2sm0rcs875koh1kun.apps.googleusercontent.com</string>
+    <string name="android_client_id">175572736060-5tqchne2il47lj25k2rl84qjck8fv7qm.apps.googleusercontent.com</string>
+</resources>

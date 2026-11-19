@@ -1,0 +1,375 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,800&family=Inter:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Nunito', sans-serif;
+  --font-body: 'Inter', sans-serif;
+
+  --color-bg: #f2fdf8;
+  --color-card: #ffffff;
+
+  --color-green-50:  #f0fdf6;
+  --color-green-100: #dcfce9;
+  --color-green-200: #bbf7d3;
+  --color-green-400: #4ade80;
+  --color-green-500: #22c55e;
+  --color-green-600: #16a34a;
+  --color-green-700: #15803d;
+
+  --color-teal-50:  #f0fdfa;
+  --color-teal-100: #ccfbf1;
+  --color-teal-400: #2dd4bf;
+  --color-teal-600: #0d9488;
+
+  --color-blue-50:  #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+
+  --color-purple-50:  #faf5ff;
+  --color-purple-100: #f3e8ff;
+  --color-purple-300: #d8b4fe;
+  --color-purple-400: #c084fc;
+  --color-purple-500: #a855f7;
+  --color-purple-600: #9333ea;
+
+  --color-amber-50:  #fffbeb;
+  --color-amber-100: #fef3c7;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+
+  --color-rose-50:  #fff1f2;
+  --color-rose-100: #ffe4e6;
+  --color-rose-400: #fb7185;
+  --color-rose-500: #f43f5e;
+  --color-rose-600: #e11d48;
+
+  --color-slate-50:  #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overscroll-behavior: none;
+  touch-action: pan-y;
+  font-family: 'Inter', sans-serif;
+  background: #f0fbf6;
+  color: #1e293b;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  background: #f0fbf6;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Nunito', sans-serif;
+  margin: 0;
+}
+
+p { margin: 0; }
+
+::-webkit-scrollbar { width: 0; background: transparent; }
+* { scrollbar-width: none; }
+
+/* ═══════════════════════════════════════════════════════
+   PREMIUM DARK THEME (Ultra-clean, High Contrast & Sleek)
+   ═══════════════════════════════════════════════════════ */
+
+html.dark, html.dark body {
+  background-color: #0b1317 !important;
+  color: #f8fafc !important;
+}
+
+html.dark #root {
+  background-color: #0b1317 !important;
+}
+
+/* Titles and Headings in Dark Mode */
+html.dark h1,
+html.dark h2,
+html.dark h3,
+html.dark [style*="color: #1e293b"],
+html.dark [style*="color: rgb(30, 41, 59)"] {
+  color: #ffffff !important;
+}
+
+/* Subtitle and Muted Text */
+html.dark [style*="color: #64748b"],
+html.dark [style*="color: #94a3b8"],
+html.dark .text-slate-400,
+html.dark .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+html.dark [style*="color: #475569"],
+html.dark [style*="color: #334155"],
+html.dark .text-slate-700 {
+  color: #cbd5e1 !important;
+}
+
+/* Top Back / Action Buttons */
+html.dark button[style*="background: white"],
+html.dark button[style*="background: #ffffff"],
+html.dark button[style*="background: rgb(255, 255, 255)"] {
+  background: #152229 !important;
+  color: #f1f5f9 !important;
+  border: 1px solid #223742 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Base White Cards -> Dark Glass Tile */
+html.dark div[style*="background: white"],
+html.dark div[style*="background: #ffffff"],
+html.dark div[style*="background: rgb(255, 255, 255)"],
+html.dark .bg-white {
+  background-color: #121e24 !important;
+  color: #f8fafc !important;
+  border-color: #1e333d !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* System Normal Live Card in Dark Mode */
+html.dark div[style*="linear-gradient(135deg,#f0fdf6,#dcfce7)"],
+html.dark div[style*="linear-gradient(160deg,#f0fdf6,#dcfce7)"] {
+  background: linear-gradient(135deg, #092c21, #0f3d30) !important;
+  border: 1.5px solid #15803d66 !important;
+  box-shadow: 0 4px 24px rgba(16, 185, 129, 0.12) !important;
+}
+
+html.dark div[style*="linear-gradient(135deg,#f0fdf6,#dcfce7)"] [style*="color: #15803d"],
+html.dark div[style*="linear-gradient(135deg,#f0fdf6,#dcfce7)"] [style*="color: #16a34a"] {
+  color: #34d399 !important;
+}
+
+html.dark div[style*="linear-gradient(135deg,#f0fdf6,#dcfce7)"] div[style*="background: rgba(255,255,255"] {
+  background: rgba(11, 28, 23, 0.75) !important;
+  border: 1px solid rgba(52, 211, 153, 0.15) !important;
+}
+
+html.dark div[style*="linear-gradient(135deg,#f0fdf6,#dcfce7)"] div[style*="background: rgba(255,255,255"] p {
+  color: #ffffff !important;
+}
+
+html.dark div[style*="linear-gradient(135deg,#f0fdf6,#dcfce7)"] div[style*="background: white"] {
+  background: rgba(11, 28, 23, 0.9) !important;
+  border: 1px solid #10b98155 !important;
+}
+
+/* Home Water Quality Sensor Tiles */
+html.dark button[style*="background: #f0fdf6"] {
+  background: #0d2820 !important;
+  border: 1.5px solid #10b98133 !important;
+}
+html.dark button[style*="background: #eff6ff"] {
+  background: #0e2436 !important;
+  border: 1.5px solid #38bdf833 !important;
+}
+html.dark button[style*="background: #faf5ff"] {
+  background: #1c172e !important;
+  border: 1.5px solid #a855f733 !important;
+}
+html.dark button[style*="background: #fff7ed"],
+html.dark button[style*="background: #fffbeb"] {
+  background: #251b14 !important;
+  border: 1.5px solid #f9731633 !important;
+}
+html.dark button[style*="background: #fff1f2"] {
+  background: #2b1418 !important;
+  border: 1.5px solid #f43f5e33 !important;
+}
+
+/* Sensor Icon Boxes */
+html.dark button div[style*="background: white"],
+html.dark div div[style*="background: white"],
+html.dark div div[style*="background: #f8fafc"],
+html.dark div div[style*="background: #f1f5f9"] {
+  background: #192a32 !important;
+  border-color: #263e4a !important;
+  box-shadow: none !important;
+}
+
+/* Water Tanks in Liquid Levels */
+html.dark svg rect[fill="#f8fafc"] {
+  fill: #16262e !important;
+  stroke: #253e4b !important;
+}
+html.dark div[style*="border: 2px solid"] {
+  background: #16262e !important;
+}
+
+/* Status Badges */
+html.dark div[style*="background: #f0fdf6"],
+html.dark span[style*="background: #f0fdf6"] {
+  background: #082f22 !important;
+  color: #34d399 !important;
+}
+html.dark div[style*="background: #fffbeb"],
+html.dark span[style*="background: #fffbeb"] {
+  background: #33210d !important;
+  color: #fbbf24 !important;
+}
+html.dark div[style*="background: #fff1f2"],
+html.dark span[style*="background: #fff1f2"] {
+  background: #381219 !important;
+  color: #fb7185 !important;
+}
+html.dark div[style*="background: #f1f5f9"],
+html.dark span[style*="background: #f1f5f9"] {
+  background: #1c2b33 !important;
+  color: #94a3b8 !important;
+}
+
+/* Bottom Navigation Bar */
+html.dark div[style*="rgba(255,255,255,0.95)"] {
+  background: rgba(15, 25, 30, 0.94) !important;
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.7) !important;
+}
+html.dark div[style*="rgba(255,255,255,0.95)"] button[style*="background: transparent"] span {
+  color: #94a3b8 !important;
+}
+html.dark div[style*="rgba(255,255,255,0.95)"] button[style*="background: #f0fdf6"] {
+  background: #162f27 !important;
+}
+html.dark div[style*="rgba(255,255,255,0.95)"] button[style*="background: #f0fdf6"] span {
+  color: #34d399 !important;
+}
+
+/* Side Drawer */
+html.dark div.fade-in[style*="background: white"] {
+  background: #0f1a20 !important;
+  border-right: 1px solid #1e333d !important;
+}
+html.dark nav button {
+  color: #cbd5e1 !important;
+}
+html.dark nav button[style*="background: #f0fdf6"] {
+  background: #143228 !important;
+  color: #34d399 !important;
+}
+html.dark div[style*="border-top: 1px solid #f1f5f9"] {
+  border-top-color: #1e333d !important;
+}
+
+/* Settings & Form inputs in Dark Mode */
+html.dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]),
+html.dark [style*="border-bottom: 1px solid #f1f5f9"] {
+  border-color: #1e333d !important;
+}
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background: #182830 !important;
+  color: #ffffff !important;
+  border-color: #27414f !important;
+}
+
+/* Top Sub-Nav Pills in Dark Mode */
+html.dark div[style*="overflow-x: auto"] button[style*="background: white"] {
+  background: #142228 !important;
+  box-shadow: none !important;
+}
+
+/* Animations */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.screen-enter { animation: fade-up 0.25s ease-out both; }
+.fade-in      { animation: fade-in 0.22s ease-out both; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.55; transform: scale(0.85); }
+}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+@keyframes wave-anim {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.wave { animation: wave-anim 3s linear infinite; }
+.wave-slow { animation: wave-anim 5s linear infinite; }
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.spin-slow { animation: spin-slow 8s linear infinite; }
+
+@keyframes bounce-sm {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-4px); }
+}
+.bounce-sm { animation: bounce-sm 2.4s ease-in-out infinite; }
+
+@keyframes loading-dot {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.75); }
+  40%            { opacity: 1;    transform: scale(1); }
+}
+
+/* Recharts & SVG Focus Highlight Reset (Prevents Chrome / Android Orange Focus Outline) */
+.recharts-wrapper,
+.recharts-wrapper *:focus,
+.recharts-wrapper *:focus-visible,
+.recharts-wrapper *:active,
+.recharts-surface,
+.recharts-surface:focus,
+.recharts-responsive-container,
+.recharts-responsive-container *:focus,
+.recharts-layer,
+.recharts-layer:focus,
+.recharts-dot,
+.recharts-dot:focus,
+.recharts-active-dot,
+.recharts-active-dot:focus,
+svg:focus,
+svg *:focus,
+svg:focus-visible,
+svg *:focus-visible,
+circle:focus,
+circle:focus-visible,
+path:focus {
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-touch-callout: none !important;
+}
+

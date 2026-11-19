@@ -1,0 +1,20 @@
+# Gitleaks Configuration for Smart Water Farm
+title = "Smart Water Farm Gitleaks Rules"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global allowlist for public keys and test tokens"
+paths = [
+  '''tests/.*''',
+  '''server/tests/.*''',
+  '''\.env\.example$'''
+]
+regexes = [
+  '''super-secret-cron-key-12345''',
+  '''VALIDCLAIM123''',
+  '''token_user_a''',
+  '''token_user_b'''
+]
+

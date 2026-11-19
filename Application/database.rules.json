@@ -1,0 +1,61 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "boards": {
+      "$boardId": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || !data.hasChild('ownerUid') || data.child('ownerUid').val() === null || data.child('ownerUid').val() === auth.uid || root.child('devices').child($boardId).child('ownerUid').val() === auth.uid || root.child('users').child(auth.uid).child('savedBoards').child($boardId).exists())",
+        ".validate": "!data.hasChild('ownerUid') || !newData.hasChild('ownerUid') || data.child('ownerUid').val() === null || data.child('ownerUid').val() === newData.child('ownerUid').val()"
+      }
+    },
+    "devices": {
+      "$deviceName": {
+        ".read": "auth != null",
+        ".write": false
+      }
+    },
+    "deviceSecrets": {
+      ".read": false,
+      ".write": false
+    },
+    "pairing": {
+      "$boardId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "history": {
+      "$deviceName": {
+        ".read": "auth != null && (root.child('devices').child($deviceName).child('ownerUid').val() === auth.uid || root.child('boards').child($deviceName).child('ownerUid').val() === auth.uid)",
+        ".write": false
+      }
+    },
+    "farms": {
+      "$farmId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "crops": {
+      "$farmId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "rateLimits": {
+      ".read": false,
+      ".write": false
+    },
+    "aiUsage": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}

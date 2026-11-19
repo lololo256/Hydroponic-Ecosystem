@@ -1,0 +1,86 @@
+{
+  "devices": {
+    "FARM-118E26": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-CFEF2E": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-279465": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-627D9D": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-9E5BB0": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-51C664": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-CED277": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-4D4DC5": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-801B73": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    },
+    "FARM-855B18": {
+      "status": "unclaimed",
+      "ownerUid": "",
+      "createdAt": 1793667864249
+    }
+  },
+  "deviceSecrets": {
+    "FARM-118E26": {
+      "claimCode": "717045"
+    },
+    "FARM-CFEF2E": {
+      "claimCode": "139683"
+    },
+    "FARM-279465": {
+      "claimCode": "767231"
+    },
+    "FARM-627D9D": {
+      "claimCode": "170650"
+    },
+    "FARM-9E5BB0": {
+      "claimCode": "938377"
+    },
+    "FARM-51C664": {
+      "claimCode": "376571"
+    },
+    "FARM-CED277": {
+      "claimCode": "955346"
+    },
+    "FARM-4D4DC5": {
+      "claimCode": "886056"
+    },
+    "FARM-801B73": {
+      "claimCode": "606429"
+    },
+    "FARM-855B18": {
+      "claimCode": "929945"
+    }
+  }
+}
