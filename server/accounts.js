@@ -77,6 +77,8 @@ function createAccountService({
   sharedCustomerTitle = DEFAULT_SIGNUP_CUSTOMER,
   memberRoleName = 'Farm Member',
   ownerRoleName = 'Farm Device Owner',
+  alertChainName = 'Farm Alerts',
+  pushTemplateName = 'Farm alert (push)',
 }) {
   async function verifyGoogleIdToken(idToken) {
     if (!idToken || typeof idToken !== 'string' || idToken.length > 4096) {
@@ -169,6 +171,68 @@ function createAccountService({
       );
     }
     await step('join_group', () => tb('post', `/api/entityGroup/${userGroup.id.id}/addEntities`, { data: [userId] }));
+    await setUpPush(email, userGroup.id.id);
+  }
+
+  /**
+   * Push notifications for the new owner (non-fatal: sign-up still succeeds if this fails).
+   * Rule chain "Farm Alerts" routes each alarm by the device's bind_owner (switch relation = e-mail)
+   * to a "send notification" node whose target is ONLY this user's group, so nobody receives
+   * another user's alerts. Creates: target "Farm push <email>" + node "[Push] <email>" + connection.
+   */
+  async function setUpPush(email, userGroupId) {
+    try {
+      const tplPage = await tb('get', '/api/notification/templates', {
+        params: { pageSize: 50, page: 0, textSearch: pushTemplateName, notificationTypes: 'RULE_NODE' },
+      });
+      const tpl = (tplPage?.data || []).find((t) => t.name === pushTemplateName);
+      const chains = await tb('get', '/api/ruleChains', { params: { pageSize: 50, page: 0, textSearch: alertChainName } });
+      const chain = (chains?.data || []).find((c) => c.name === alertChainName);
+      if (!tpl || !chain) {
+        console.warn('[accounts] push setup skipped: template or rule chain not found');
+        return;
+      }
+
+      const targetName = `Farm push ${email}`;
+      const tPage = await tb('get', '/api/notification/targets', { params: { pageSize: 50, page: 0, textSearch: targetName } });
+      let target = (tPage?.data || []).find((t) => t.name === targetName);
+      if (!target) {
+        target = await tb('post', '/api/notification/target', {
+          data: {
+            name: targetName,
+            configuration: {
+              type: 'PLATFORM_USERS',
+              description: `Farm alerts for the owner ${email}`,
+              usersFilter: { type: 'USER_GROUP_LIST', groupsIds: [userGroupId] },
+            },
+          },
+        });
+      }
+
+      const md = await tb('get', `/api/ruleChain/${chain.id.id}/metadata`);
+      const nodeName = `[Push] ${email}`;
+      if ((md.nodes || []).some((n) => n.name === nodeName)) return;
+      const routerIndex = (md.nodes || []).findIndex((n) => n.name === '[Alert] route to owner');
+      if (routerIndex < 0) {
+        console.warn('[accounts] push setup skipped: router node not found');
+        return;
+      }
+      const pushCount = md.nodes.filter((n) => String(n.name).startsWith('[Push] ')).length;
+      md.nodes.push({
+        type: 'org.thingsboard.rule.engine.notification.TbNotificationNode',
+        name: nodeName,
+        debugSettings: null,
+        singletonMode: false,
+        configurationVersion: 0,
+        configuration: { templateId: tpl.id.id, targets: [target.id.id] },
+        additionalInfo: { layoutX: 1800, layoutY: 40 + pushCount * 90, description: 'Smart Water Farm alerts' },
+      });
+      md.connections = md.connections || [];
+      md.connections.push({ fromIndex: routerIndex, toIndex: md.nodes.length - 1, type: email });
+      await tb('post', '/api/ruleChain/metadata', { data: md });
+    } catch (err) {
+      console.warn('[accounts] push setup notice:', err?.response?.status || '', err?.message || err);
+    }
   }
 
   /**
