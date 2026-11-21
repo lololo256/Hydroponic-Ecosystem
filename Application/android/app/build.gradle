@@ -22,6 +22,20 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+    // full = the real app (unchanged id com.hydroponic.ecosystem).
+    // demo = instructor demo app with a virtual board (web assets from `npm run build:demo`),
+    //        own id so it installs next to the real app. Build with scripts/build-demo-apk.sh
+    flavorDimensions = ["edition"]
+    productFlavors {
+        full {
+            dimension "edition"
+        }
+        demo {
+            dimension "edition"
+            applicationIdSuffix ".demo"
+            versionNameSuffix "-demo"
+        }
+    }
 }
 
 repositories {

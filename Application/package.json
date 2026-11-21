@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:demo": "vite --mode demo --port 8455",
+    "build:demo": "vite build --mode demo",
     "build": "vite build",
     "preview": "vite preview",
     "format": "oxfmt",

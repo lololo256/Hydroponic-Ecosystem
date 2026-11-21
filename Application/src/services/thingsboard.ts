@@ -442,6 +442,8 @@ export function describeRpcError(code: string | undefined | null): string {
       return 'อุปกรณ์ตอบกลับในรูปแบบที่ไม่ถูกต้อง';
     case 'INVALID_SECONDS':
       return 'ระยะเวลาเปิดปั๊มไม่ถูกต้อง';
+    case 'PUMP_BUSY':
+      return 'มีปั๊มตัวอื่นทำงานอยู่ อุปกรณ์เปิดปั๊มได้ทีละตัว กรุณารอให้ปั๊มที่ทำงานอยู่หยุดก่อนแล้วสั่งใหม่';
     case 'PUMP_TIMER_FAIL':
       return 'อุปกรณ์ตั้งตัวจับเวลาปั๊มไม่สำเร็จ จึงไม่เปิดปั๊มเพื่อความปลอดภัย';
     case 'INVALID_MODE':
@@ -626,6 +628,36 @@ export const thingsboard = {
     }
 
     return { token: loginData.token, user };
+  },
+
+  /**
+   * Forgot password: ThingsBoard e-mails a reset link (POST /api/noauth/resetPasswordByEmail).
+   * ThingsBoard answers 200 whether or not the account exists (no account enumeration),
+   * so the UI must not claim the account exists.
+   */
+  async requestPasswordReset(email: string): Promise<void> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new TBError('OFFLINE', 'ไม่มีการเชื่อมต่ออินเทอร์เน็ต');
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${getBaseUrl()}/api/noauth/resetPasswordByEmail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+        signal: controller.signal,
+      });
+    } catch (netErr: any) {
+      if (netErr?.name === 'AbortError') throw new TBError('TIMEOUT', 'การเชื่อมต่อหมดเวลา กรุณาลองใหม่');
+      throw new TBError('OFFLINE', 'ไม่สามารถเชื่อมต่อ ThingsBoard Cloud ได้');
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status === 429) throw new TBError('INVALID_DATA', 'ขอรีเซ็ตบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่', 429);
+    if (res.status >= 500) throw new TBError('SERVER_ERROR', 'เซิร์ฟเวอร์ขัดข้อง กรุณาลองใหม่ภายหลัง', res.status);
+    if (!res.ok) throw new TBError('INVALID_DATA', 'ส่งคำขอรีเซ็ตรหัสผ่านไม่สำเร็จ กรุณาตรวจสอบอีเมล', res.status);
   },
 
   /**

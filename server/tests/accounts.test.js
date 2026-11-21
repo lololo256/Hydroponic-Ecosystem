@@ -246,7 +246,10 @@ test('sign-up also sets up push for the owner only (target = own user group + ro
   const md = fake.state.chainMd;
   const idx = md.nodes.findIndex((n) => n.name === '[Push] grower@farm.io');
   assert.ok(idx > 0, 'push node added');
-  assert.deepStrictEqual(md.nodes[idx].configuration, { templateId: 'tpl-1', targets: [fake.state.targets[0].id.id] });
+  assert.deepStrictEqual(md.nodes[idx].configuration, {
+    templateId: { entityType: 'NOTIFICATION_TEMPLATE', id: 'tpl-1' },
+    targets: [fake.state.targets[0].id.id],
+  });
   assert.deepStrictEqual(md.connections, [{ fromIndex: 1, toIndex: idx, type: 'grower@farm.io' }], 'routed only by the owner e-mail');
 
   // running the setup again (e.g. re-sign-up attempt) must not duplicate target / node

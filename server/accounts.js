@@ -224,7 +224,9 @@ function createAccountService({
         debugSettings: null,
         singletonMode: false,
         configurationVersion: 0,
-        configuration: { templateId: tpl.id.id, targets: [target.id.id] },
+        // templateId must be the entity-id object: ThingsBoard PE 4.4 fails to start the node
+        // (ClassCastException) when it is a plain UUID string, and then no push is ever sent.
+        configuration: { templateId: { entityType: 'NOTIFICATION_TEMPLATE', id: tpl.id.id }, targets: [target.id.id] },
         additionalInfo: { layoutX: 1800, layoutY: 40 + pushCount * 90, description: 'Smart Water Farm alerts' },
       });
       md.connections = md.connections || [];

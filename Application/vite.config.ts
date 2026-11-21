@@ -23,6 +23,9 @@ export default defineConfig(({ mode }) => {
       figmaErrorOverlayReplay(),
       figmaReactRefreshBoundaryFallback(),
       figmaMakeKitPlugin({ storiesGlob: '/src/**/*.stories.{ts,tsx,js,jsx}' }),
+      // `vite build --mode demo` only: instructor demo app (src/demo/), locked to the demo-board account.
+      // The normal build never loads this plugin, so the real app bundle is unchanged.
+      ...(mode === 'demo' ? [demoBuild()] : []),
     ],
     resolve: {
       alias: {
@@ -45,6 +48,54 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+
+/**
+ * Demo app (instructor build): real ThingsBoard, auto sign-in to the owner's demo-board account
+ * (src/demo/thingsboard.demo.ts), no push, demo labels on, plus a fixed "demo for the instructor" label.
+ * Files under src/demo/ keep importing the real modules (the demo client wraps the real one).
+ */
+function demoBuild(): Plugin {
+  const src = path.resolve(__dirname, 'src')
+  const norm = (p: string) => path.normalize(p).toLowerCase()
+  const swaps = new Map<string, string>([
+    [norm(path.join(src, 'services/thingsboard.ts')), path.join(src, 'demo/thingsboard.demo.ts')],
+    [norm(path.join(src, 'services/pushNotificationService.ts')), path.join(src, 'demo/pushNotificationService.demo.ts')],
+    [norm(path.join(src, 'config/features.ts')), path.join(src, 'demo/features.demo.ts')],
+  ])
+  const demoDir = norm(path.join(src, 'demo'))
+
+  return {
+    name: 'smartfarm-demo-build',
+    enforce: 'pre',
+    async resolveId(source, importer, options) {
+      if (!importer || norm(importer).startsWith(demoDir)) return null
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true })
+      if (!resolved) return null
+      return swaps.get(norm(resolved.id.split('?')[0])) ?? null
+    },
+    transformIndexHtml(html) {
+      return {
+        html: html.replace(/<title>[^<]*<\/title>/, '<title>Hydroponic Demo</title>'),
+        tags: [
+          {
+            tag: 'div',
+            attrs: {
+              id: 'demo-instructor-label',
+              role: 'status',
+              style:
+                'position:fixed;top:calc(env(safe-area-inset-top,0px) + 4px);left:50%;transform:translateX(-50%);' +
+                'z-index:2147483646;pointer-events:none;padding:3px 12px;border-radius:999px;' +
+                'background:rgba(180,83,9,0.92);color:#fff;font:600 11px/1.4 system-ui,sans-serif;' +
+                'letter-spacing:.2px;box-shadow:0 2px 8px rgba(0,0,0,.18);white-space:nowrap;',
+            },
+            children: 'เดโมสำหรับอาจารย์ · บอร์ดทดลอง',
+            injectTo: 'body',
+          },
+        ],
+      }
+    },
+  }
+}
 
 type FigmaSiteConfiguration = {
   title?: string

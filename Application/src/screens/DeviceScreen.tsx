@@ -38,35 +38,7 @@ export default function DeviceScreen({ navigate, goBack }: NavProps) {
     factoryResetDevice,
     telemetryFreshness,
     canControl,
-    setDemoSimValues,
   } = useSmartFarm();
-
-  // Demo board (sim:true) only: inject simulated water values to watch AUTO dosing on the device screen.
-  const isDemoBoard = Boolean(data.device?.isSim);
-  const [simPh, setSimPh] = useState('');
-  const [simEc, setSimEc] = useState('');
-  const [simTemp, setSimTemp] = useState('');
-  const [simBusy, setSimBusy] = useState(false);
-  const applySimValues = async () => {
-    const num = (s: string) => {
-      const t = s.trim().replace(',', '.');
-      if (!t) return undefined;
-      const v = Number(t);
-      return Number.isFinite(v) ? v : undefined;
-    };
-    setSimBusy(true);
-    try {
-      const res = await setDemoSimValues({ ph: num(simPh), ec: num(simEc), temp: num(simTemp) });
-      showToast(res.message);
-      if (res.success) {
-        setSimPh('');
-        setSimEc('');
-        setSimTemp('');
-      }
-    } finally {
-      setSimBusy(false);
-    }
-  };
 
   const [activeModal, setActiveModal] = useState<
     'none' | 'reboot' | 'resetWifi' | 'factoryReset' | 'remove'
@@ -904,67 +876,6 @@ export default function DeviceScreen({ navigate, goBack }: NavProps) {
             </div>
           </div>
         </div>
-
-        {/* บอร์ดจำลองเท่านั้น: ตั้งค่าน้ำจำลองเพื่อทดสอบโหมดอัตโนมัติ */}
-        {isDemoBoard && (
-          <div className="glass-card" style={{ padding: '16px' }}>
-            <h3 style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }}>
-              ทดสอบระบบอัตโนมัติ
-            </h3>
-            <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 12px', lineHeight: 1.5 }}>
-              ใส่ค่าที่ต่ำหรือสูงกว่าช่วงที่ตั้งไว้ แล้วเปิดโหมดอัตโนมัติ อุปกรณ์จะตรวจภายใน 30 วินาที
-              แล้วจ่ายปั๊มทีละตัว ตัวละ 2 วินาที และผสม 5 นาที ดูปั๊มที่ทำงานได้บนจออุปกรณ์
-            </p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
-              {[
-                { label: 'pH', value: simPh, set: setSimPh, ph: 'เช่น 7.2' },
-                { label: 'EC (mS/cm)', value: simEc, set: setSimEc, ph: 'เช่น 1.0' },
-                { label: 'อุณหภูมิ (°C)', value: simTemp, set: setSimTemp, ph: 'เช่น 30' },
-              ].map((f) => (
-                <label key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ fontSize: 11, color: '#64748b', fontWeight: 500 }}>{f.label}</span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={f.value}
-                    placeholder={f.ph}
-                    onChange={(e) => f.set(e.target.value)}
-                    style={{
-                      width: '100%',
-                      minHeight: 44,
-                      padding: '0 10px',
-                      borderRadius: 10,
-                      border: '1px solid #cbd5e1',
-                      fontSize: 14,
-                      color: '#0f172a',
-                      background: '#ffffff',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                </label>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => { if (!commandsLocked && !simBusy) void applySimValues(); }}
-              disabled={commandsLocked || simBusy}
-              title={commandsLocked ? commandLockReason : undefined}
-              style={{
-                width: '100%',
-                minHeight: 44,
-                borderRadius: 12,
-                border: 'none',
-                background: commandsLocked || simBusy ? '#cbd5e1' : '#0f766e',
-                color: '#ffffff',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: commandsLocked || simBusy ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {simBusy ? 'กำลังส่งค่า...' : 'ส่งค่าทดสอบ'}
-            </button>
-          </div>
-        )}
 
         {/* การตรวจเช็กสุขภาพเซนเซอร์และฮาร์ดแวร์ */}
         <div className="glass-card" style={{ padding: '16px' }}>

@@ -6,6 +6,7 @@ import WaterQualityRingCard from '../components/WaterQualityRingCard';
 import StatusBadge from '../components/StatusBadge';
 import AIDiagnosisModal from '../components/AIDiagnosisModal';
 import AIBriefingCard from '../components/AIBriefingCard';
+import DemoSimPanel from '../components/DemoSimPanel';
 import SensorHealthCard from '../components/SensorHealthCard';
 import { calculatePlantDays } from '../services/briefingEngine';
 import {
@@ -675,6 +676,13 @@ export default function HomeScreen({ navigate, onMenuOpen }: HomeProps) {
                 onAddFarm={() => navigate('add-board')}
                 prefersReducedMotion={prefersReducedMotion}
               />
+            </div>
+
+            {/* ── ทดสอบระบบอัตโนมัติ: ส่งค่าเข้าบอร์ดทดลองจริง (CYD DEMO_SIM, RPC simSet) ──
+                โชว์เฉพาะบอร์ดที่ส่ง sim:true — บอร์ดเซนเซอร์จริงในแอปหลักไม่มีกล่องนี้ (DemoSimPanel คืน null)
+                อยู่บนสุดของแดชบอร์ดเพื่อให้อาจารย์หาเจอง่าย */}
+            <div style={{ marginTop: 12, marginBottom: 16 }}>
+              <DemoSimPanel />
             </div>
 
             {/* ── 5 home sections, in the order chosen in app settings (ตั้งค่าแอป > หน้าหลัก) ── */}

@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Demo flavor only: app name shown on the phone (overrides src/main/res/values/strings.xml) -->
+<resources>
+    <string name="app_name">Hydroponic Demo</string>
+    <string name="title_activity_main">Hydroponic Demo</string>
+</resources>

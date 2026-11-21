@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { NavProps } from '../types';
 import { useSmartFarm } from '../context/SmartFarmContext';
+import ForgotPasswordModal from '../components/ForgotPasswordModal';
 import { Eye, EyeOff, AlertCircle, ArrowLeft } from 'lucide-react';
 
 export default function LoginScreen({ navigate }: NavProps) {
-  const { loginWithEmail, showAlert } = useSmartFarm();
+  const { loginWithEmail } = useSmartFarm();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -35,13 +36,9 @@ export default function LoginScreen({ navigate }: NavProps) {
     }
   };
 
-  const handleForgotPassword = () => {
-    showAlert({
-      title: 'รีเซ็ตรหัสผ่าน',
-      message: 'กรุณาติดต่อผู้ดูแลระบบ ThingsBoard เพื่อดำเนินการรีเซ็ตรหัสผ่านของคุณ',
-      variant: 'info',
-    });
-  };
+  // ลืมรหัสผ่าน: ขอลิงก์ตั้งรหัสใหม่จาก ThingsBoard ทางอีเมล (ForgotPasswordModal)
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const handleForgotPassword = () => setForgotOpen(true);
 
   return (
     <div
@@ -317,6 +314,7 @@ export default function LoginScreen({ navigate }: NavProps) {
           </button>
         </p>
       </div>
+      <ForgotPasswordModal open={forgotOpen} initialEmail={email} onClose={() => setForgotOpen(false)} />
     </div>
   );
 }

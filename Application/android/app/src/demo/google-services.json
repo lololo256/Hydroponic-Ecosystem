@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "175572736060",
+    "firebase_url": "https://smart-water-farm-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "smart-water-farm",
+    "storage_bucket": "smart-water-farm.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:175572736060:android:b78a1c151ebb6877eccb39",
+        "android_client_info": {
+          "package_name": "com.hydroponic.ecosystem.demo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "175572736060-5tqchne2il47lj25k2rl84qjck8fv7qm.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.hydroponic.ecosystem.demo",
+            "certificate_hash": "b810035eb235b73f443354558cec7b0eb30a237a"
+          }
+        },
+        {
+          "client_id": "175572736060-u745g13ng16ovfh2sm0rcs875koh1kun.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBi1ycgVt8Vn6KacMi9xq6PQ2CzygoBrTs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "175572736060-u745g13ng16ovfh2sm0rcs875koh1kun.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "175572736060-8i3kgug2haja1leb7nk2ooqjs3hded46.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.hydroponic.ecosystem"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
