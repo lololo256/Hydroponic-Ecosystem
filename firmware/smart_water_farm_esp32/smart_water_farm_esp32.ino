@@ -127,7 +127,9 @@
 // ------------------------------------------------------------------------------
 #define PIN_ONEWIRE_TEMP 39   // DS18B20 (4.7k pull-up on board)
 #define PIN_FLOAT_MAIN 40     // single float switch, external pull-up
-#define FLOAT_WATER_PRESENT_LEVEL LOW  // switch closes to GND when water is present (change if NC wiring)
+// 2026-11-22: owner's float switch reads the other way round (OK showed when the tank was low)
+// -> water present = pin HIGH (switch open). Set back to LOW for a switch that closes to GND with water.
+#define FLOAT_WATER_PRESENT_LEVEL HIGH
 #define HAS_FLOAT_SWITCH 1
 
 #define PIN_I2C_SDA 16
@@ -444,6 +446,15 @@ float phCalV4 = PH_CAL_V4_DEFAULT;
 // points come from real buffers (the defaults are only a typical module curve, not this probe).
 uint8_t phCalMask = 0;
 #define PH_CAL_ALL 0x03
+// pH sliding window: mean of the last PH_WIN cycle medians (one per SENSOR_CYCLE_MS = 5 s -> 1 min).
+// pH and calibration use the window mean, so the value is steady; any rejected cycle (noisy /
+// floating / out of range) restarts the window, so a moved probe never mixes old and new liquid.
+#define PH_WIN 12
+#define PH_STABLE_SD_V 0.003f  // window std-dev below this (and window full) = "STABLE"
+float phWin[PH_WIN];
+uint8_t phWinN = 0, phWinIdx = 0;
+float phWinMean = NAN, phWinSd = NAN, phLastRawV = NAN;
+static bool phWinStable() { return phWinN >= PH_WIN && phWinSd <= PH_STABLE_SD_V; }
 
 // identity / secrets (fixed-size buffers, no String churn)
 char deviceId[33] = "";
@@ -546,6 +557,7 @@ uint32_t sampConvStart = 0;
 float phSamples[ADS_SAMPLES];
 float tdsSamples[ADS_SAMPLES];
 uint32_t nextSensorCycleAt = 0;
+uint32_t fastCycleUntil = 0;  // != 0: 1 s sensor cycles until this millis() (serial command "fast")
 bool dsPending = false;
 uint32_t dsRequestAt = 0;
 int floatRawLast = -1;
@@ -882,8 +894,25 @@ static void finishAdsCycle(uint32_t now) {
 
   // ---- pH ----
   bool winOk = !mirrored && (pinV >= PH_PIN_MIN_V) && (pinV <= PH_PIN_MAX_V) && (spread <= ADC_MAX_SPREAD_V);
+  phLastRawV = pinV * PH_DIVIDER_RATIO;
+  if (winOk) {
+    phWin[phWinIdx] = phLastRawV;
+    phWinIdx = (phWinIdx + 1) % PH_WIN;
+    if (phWinN < PH_WIN) phWinN++;
+    float sum = 0.0f;
+    for (uint8_t i = 0; i < phWinN; i++) sum += phWin[i];
+    phWinMean = sum / phWinN;
+    float sq = 0.0f;
+    for (uint8_t i = 0; i < phWinN; i++) sq += (phWin[i] - phWinMean) * (phWin[i] - phWinMean);
+    phWinSd = phWinN > 1 ? sqrtf(sq / (phWinN - 1)) : 0.0f;
+  } else {
+    phWinN = 0;
+    phWinIdx = 0;
+    phWinMean = NAN;
+    phWinSd = NAN;
+  }
   S.phVoltOk = winOk;
-  S.phSensorV = pinV * PH_DIVIDER_RATIO;
+  S.phSensorV = winOk ? phWinMean : phLastRawV;
   bool phValid = false;
   // 2026-11-21 (owner's decision): pH is sent even before a 2-point buffer calibration. Until then it
   // uses the PH_CAL_V7/V4_DEFAULT module curve, which may not match this probe (see [CAL] on Serial).
@@ -922,6 +951,15 @@ static void finishAdsCycle(uint32_t now) {
   if (ecValid) S.ecTs = now;
   oledDirty = true;
 
+  // Calibration helper line, every cycle (Serial only): raw = this cycle, avg/sd = sliding window
+  if (winOk)
+    Serial.printf("[PH] raw=%.4fV avg=%.4fV sd=%.4fV n=%u/%u %s pH=%s%.2f\n", (double)phLastRawV, (double)phWinMean,
+                  (double)phWinSd, (unsigned)phWinN, (unsigned)PH_WIN, phWinStable() ? "STABLE" : "settling",
+                  phCalMask == PH_CAL_ALL ? "" : "~", phValid ? (double)S.ph : -1.0);
+  else
+    Serial.printf("[PH] raw=%.4fV rejected (%s) - window restarted\n", (double)phLastRawV,
+                  mirrored ? "A0=A1 floating" : spread > ADC_MAX_SPREAD_V ? "noisy" : "out of range");
+
   // Serial-only diagnostics (raw measured volts, never sent to the cloud), every 10 s
   static uint32_t lastDiagAt = 0;
   if (now - lastDiagAt >= 10000) {
@@ -943,7 +981,12 @@ static void finishAdsCycle(uint32_t now) {
 void sensorTick(uint32_t now) {
   // ---- start of a cycle ----
   if (!sampActive && timeReached(now, nextSensorCycleAt)) {
-    nextSensorCycleAt = now + SENSOR_CYCLE_MS;
+    // "fast" serial command: 1 s cycles for tuning the pH module trimmer, back to 5 s after 10 min
+    if (fastCycleUntil && timeReached(now, fastCycleUntil)) {
+      fastCycleUntil = 0;
+      Serial.println("[CAL] fast readout off (back to 5 s)");
+    }
+    nextSensorCycleAt = now + (fastCycleUntil ? 1000UL : SENSOR_CYCLE_MS);
 #if HAS_DS18B20
     if (!dsPending) {
       dsStartConversion();  // non-blocking: result read DS18B20_CONV_MS later
@@ -1643,7 +1686,8 @@ static void handleRpc(const char *reqId, JsonDocument &doc) {
     // need a fresh, stable, in-window voltage from the probe (phVoltOk is recomputed every
     // 5 s cycle and cleared on any I2C failure)
     (void)now;
-    if (!S.adsOk || !S.phVoltOk) return rpcError(reqId, "PH_SIGNAL_INVALID");
+    // window mean of at least half a minute of in-window readings (see PH_WIN)
+    if (!S.adsOk || !S.phVoltOk || phWinN < PH_WIN / 2) return rpcError(reqId, "PH_SIGNAL_INVALID");
     float v = S.phSensorV;
     float n7 = (point == 7) ? v : phCalV7;
     float n4 = (point == 4) ? v : phCalV4;
@@ -3015,6 +3059,92 @@ void setup() {
   esp_task_wdt_add(NULL);
 }
 
+// ------------------------------------------------------------------------------
+// pH calibration over Serial (USB). Type a command + Enter in a serial monitor:
+//   calshow            current calibration
+//   cal7 / cal4        store the sliding-window mean (window must be full) as the pH 7 / pH 4 point
+//   calset <v7> <v4>   store both points directly (volts at pH 7 and pH 4, e.g. from a multi-point fit)
+//   caldefault         back to the default module curve (not calibrated)
+// Same storage as RPC calibratePh (NVS namespace "calib").
+// ------------------------------------------------------------------------------
+static void phCalShow(const char *tag) {
+  float span = phCalV4 - phCalV7;
+  Serial.printf("[CAL] %s v7=%.4fV v4=%.4fV (%.1f mV/pH) mask=%u %s\n", tag, (double)phCalV7, (double)phCalV4,
+                (double)(span * 1000.0f / 3.0f), (unsigned)phCalMask, phCalMask == PH_CAL_ALL ? "CALIBRATED" : "not calibrated");
+}
+
+static void serialCmd(char *cmd) {
+  for (char *p = cmd; *p; p++) *p = (char)tolower((unsigned char)*p);
+  if (strcmp(cmd, "calshow") == 0) {
+    phCalShow("now");
+  } else if (strcmp(cmd, "cal7") == 0 || strcmp(cmd, "cal4") == 0) {
+    int point = cmd[3] - '0';
+    if (phWinN < PH_WIN || !isfinite(phWinMean)) {
+      Serial.printf("[CAL] REFUSED: window not full yet (%u/%u) - wait until n=%u/%u\n", (unsigned)phWinN,
+                    (unsigned)PH_WIN, (unsigned)PH_WIN, (unsigned)PH_WIN);
+      return;
+    }
+    float n7 = (point == 7) ? phWinMean : phCalV7;
+    float n4 = (point == 4) ? phWinMean : phCalV4;
+    if (fabsf(n7 - n4) < PH_CAL_MIN_SPAN_V && phCalMask != 0) {
+      Serial.printf("[CAL] REFUSED: pH 7 and pH 4 only %.4f V apart (need >= %.2f V)\n", (double)fabsf(n7 - n4),
+                    (double)PH_CAL_MIN_SPAN_V);
+      return;
+    }
+    phCalV7 = n7;
+    phCalV4 = n4;
+    phCalMask |= (point == 7) ? 0x01 : 0x02;
+    saveCalibration();
+    Serial.printf("[CAL] pH%d stored = %.4f V (window sd %.4f V%s)\n", point, (double)phWinMean, (double)phWinSd,
+                  phWinStable() ? "" : " - NOT stable, consider repeating");
+    phCalShow("saved");
+  } else if (strncmp(cmd, "calset ", 7) == 0) {
+    float a = NAN, b = NAN;
+    if (sscanf(cmd + 7, "%f %f", &a, &b) != 2 || !isfinite(a) || !isfinite(b) || a < PH_PIN_MIN_V || a > PH_PIN_MAX_V ||
+        b < PH_PIN_MIN_V || b > PH_PIN_MAX_V || fabsf(a - b) < PH_CAL_MIN_SPAN_V) {
+      Serial.println("[CAL] REFUSED: use  calset <v7> <v4>  (volts, 0.05-3.25, at least 0.10 V apart)");
+      return;
+    }
+    phCalV7 = a;
+    phCalV4 = b;
+    phCalMask = PH_CAL_ALL;
+    saveCalibration();
+    phCalShow("saved");
+  } else if (strcmp(cmd, "fast") == 0) {
+    fastCycleUntil = millis() + 600000UL;
+    if (!fastCycleUntil) fastCycleUntil = 1;
+    nextSensorCycleAt = millis();
+    Serial.println("[CAL] fast readout on: one [PH] line per second for 10 min (\"slow\" = back to 5 s)");
+  } else if (strcmp(cmd, "slow") == 0) {
+    fastCycleUntil = 0;
+    Serial.println("[CAL] fast readout off (back to 5 s)");
+  } else if (strcmp(cmd, "caldefault") == 0) {
+    phCalV7 = PH_CAL_V7_DEFAULT;
+    phCalV4 = PH_CAL_V4_DEFAULT;
+    phCalMask = 0;
+    saveCalibration();
+    phCalShow("reset");
+  } else if (cmd[0]) {
+    Serial.println("[CAL] commands: calshow | cal7 | cal4 | calset <v7> <v4> | caldefault | fast | slow");
+  }
+}
+
+static void serialCmdTick() {
+  static char buf[48];
+  static uint8_t len = 0;
+  while (Serial.available() > 0) {
+    int c = Serial.read();
+    if (c < 0 || c == '\r') continue;
+    if (c == '\n') {
+      buf[len] = 0;
+      len = 0;
+      serialCmd(buf);
+    } else if (len < sizeof(buf) - 1) {
+      buf[len++] = (char)c;
+    }
+  }
+}
+
 void loop() {
   esp_task_wdt_reset();
   uint32_t now = millis();
@@ -3032,6 +3162,7 @@ void loop() {
   if (!isBound && !isPairingWindowOpen) refreshPairingForClaim("unbound: always pairable");
 
   sensorTick(now);
+  serialCmdTick();
   bleTick(now);
   wifiTick(now);
   mqttTick(now);
