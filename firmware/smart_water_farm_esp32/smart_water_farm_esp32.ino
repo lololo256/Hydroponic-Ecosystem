@@ -83,7 +83,8 @@
 // If the compile fails with "OneWire.h: No such file", either install the library
 // (Library Manager) or set the matching USE_* to 0.
 #define USE_DS18B20 1
-#define OLED_SH1106 1   // 1 = SH1106G 128x64 @0x3C via Adafruit_SH110X, 0 = no OLED
+#define OLED_SH1106 1   // 1 = OLED 128x64 @0x3C present, 0 = no OLED
+#define OLED_IS_SSD1306 1  // 1 = SSD1306 0.96" (Adafruit_SSD1306), 0 = SH1106G 1.3" (Adafruit_SH110X)
 
 #if USE_DS18B20
 #include <OneWire.h>
@@ -96,7 +97,15 @@
 
 #if OLED_SH1106
 #include <Adafruit_GFX.h>
+#if OLED_IS_SSD1306
+#include <Adafruit_SSD1306.h>
+#define OLED_WHITE SSD1306_WHITE
+#define OLED_BLACK SSD1306_BLACK
+#else
 #include <Adafruit_SH110X.h>
+#define OLED_WHITE SH110X_WHITE
+#define OLED_BLACK SH110X_BLACK
+#endif
 #define HAS_OLED 1
 #else
 #define HAS_OLED 0
@@ -127,6 +136,9 @@
 #define ADS1115_ADDR 0x48
 #define ADS_CH_PH 0           // ADS1115 A0
 #define ADS_CH_TDS 1          // ADS1115 A1
+// 1 = TDS/EC probe is plugged into U6 (A1). 0 = not installed: EC/TDS are never sent and A1
+// (floating, it copies A0) is ignored, so it cannot fake EC or hide pH.
+#define TDS_INSTALLED 1
 #define OLED_ADDR 0x3C
 
 // relays: 2N3904 + 470R base + 12k pull-down -> HIGH = ON (schematic Schematic_Hydroponic.pdf p.9-10)
@@ -167,12 +179,16 @@
 #define PH_PIN_MIN_V 0.05f
 #define PH_PIN_MAX_V 3.25f
 // TDS module (DFRobot-type) outputs 0..2.3V
-#define TDS_PIN_MIN_V 0.00f
+#define TDS_PIN_MIN_V 0.02f      // ~0 V = probe in air / unplugged (with pull-down): omit, never "0 ppm"
 #define TDS_PIN_MAX_V 2.40f
 #define TDS_K_VALUE 1.0f          // DFRobot kValue (probe constant), 1.0 = factory
 #define TDS_MAX_PPM 5000.0f
 // If the 9 samples spread more than this (V), the input is floating/noisy -> invalid
 #define ADC_MAX_SPREAD_V 0.15f
+// A floating ADS1115 input copies the charge of the channel converted just before it, so an
+// unplugged probe reads (almost) the same volts as the other channel. If A0 and A1 agree
+// within this window, at least one input is floating -> omit BOTH (zero-mock).
+#define ADC_MIRROR_V 0.03f
 #define ADS_SAMPLES 9
 
 #define TEMP_MIN_VALID_C -10.0f
@@ -301,12 +317,106 @@ WiFiClient netClient;
 PubSubClient mqtt(netClient);
 
 #if HAS_DS18B20
-OneWire oneWire(PIN_ONEWIRE_TEMP);
-DallasTemperature tempSensors(&oneWire);
+// ---- Minimal 1-Wire driver for ONE DS18B20 (Skip ROM), on the ESP-IDF GPIO API ----------------
+// Measured on this board: the OneWire library's reset on IO39 sees NO presence pulse, while the same
+// reset done with plain GPIO calls sees the sensor (presence=1). So the probe is driven here directly.
+// Every reading must pass the DS18B20's own CRC-8 and a config-byte check; otherwise it is dropped
+// (temp key omitted) - a bad read can never become a temperature.
+#include <driver/gpio.h>
+static const gpio_num_t OW_PIN = (gpio_num_t)PIN_ONEWIRE_TEMP;
+static void owInit() {
+  gpio_reset_pin(OW_PIN);
+  gpio_set_direction(OW_PIN, GPIO_MODE_INPUT_OUTPUT_OD);  // open-drain: 1 = released (4.7k pull-up)
+  gpio_set_level(OW_PIN, 1);
+}
+static bool owReset() {
+  noInterrupts();
+  gpio_set_level(OW_PIN, 0);
+  delayMicroseconds(500);
+  gpio_set_level(OW_PIN, 1);
+  delayMicroseconds(70);
+  int presence = gpio_get_level(OW_PIN);  // sensor pulls LOW = present
+  interrupts();
+  delayMicroseconds(430);
+  return presence == 0 && gpio_get_level(OW_PIN) == 1;  // and the bus must be released again
+}
+static void owWriteBit(uint8_t b) {
+  noInterrupts();
+  gpio_set_level(OW_PIN, 0);
+  delayMicroseconds(b ? 6 : 60);
+  gpio_set_level(OW_PIN, 1);
+  interrupts();
+  delayMicroseconds(b ? 64 : 10);
+}
+static uint8_t owReadBit() {
+  noInterrupts();
+  gpio_set_level(OW_PIN, 0);
+  delayMicroseconds(3);
+  gpio_set_level(OW_PIN, 1);
+  delayMicroseconds(10);
+  uint8_t r = (uint8_t)gpio_get_level(OW_PIN);
+  interrupts();
+  delayMicroseconds(53);
+  return r;
+}
+static void owWriteByte(uint8_t v) {
+  for (int i = 0; i < 8; i++) owWriteBit((v >> i) & 1);
+}
+static uint8_t owReadByte() {
+  uint8_t v = 0;
+  for (int i = 0; i < 8; i++) v |= (uint8_t)(owReadBit() << i);
+  return v;
+}
+static uint8_t owCrc8(const uint8_t *d, int n) {
+  uint8_t crc = 0;
+  for (int i = 0; i < n; i++) {
+    uint8_t in = d[i];
+    for (int b = 0; b < 8; b++) {
+      uint8_t mix = (crc ^ in) & 0x01;
+      crc >>= 1;
+      if (mix) crc ^= 0x8C;
+      in >>= 1;
+    }
+  }
+  return crc;
+}
+static bool dsPresent = false;  // last reset saw the sensor
+static bool dsStartConversion() {
+  dsPresent = owReset();
+  if (!dsPresent) return false;
+  owWriteByte(0xCC);  // Skip ROM (single sensor on the bus)
+  owWriteByte(0x44);  // Convert T (12-bit default, 750 ms)
+  return true;
+}
+// true only for a CRC-valid scratchpad from a real DS18B20
+static bool dsReadTemp(float &out, const char *&why) {
+  dsPresent = owReset();
+  if (!dsPresent) { why = "NO PRESENCE (check U7 wiring)"; return false; }
+  owWriteByte(0xCC);
+  owWriteByte(0xBE);  // Read Scratchpad
+  uint8_t d[9];
+  bool allZero = true, allFF = true;
+  for (int i = 0; i < 9; i++) {
+    d[i] = owReadByte();
+    if (d[i] != 0x00) allZero = false;
+    if (d[i] != 0xFF) allFF = false;
+  }
+  if (allZero || allFF) { why = "BUS STUCK"; return false; }
+  if (owCrc8(d, 8) != d[8]) { why = "CRC ERROR"; return false; }
+  if ((d[4] & 0x9F) != 0x1F) { why = "BAD CONFIG BYTE"; return false; }
+  int16_t raw = (int16_t)(((uint16_t)d[1] << 8) | d[0]);
+  out = raw / 16.0f;
+  why = "OK";
+  return true;
+}
 #endif
 
 #if HAS_OLED
+#if OLED_IS_SSD1306
+Adafruit_SSD1306 oled(128, 64, &Wire, -1, I2C_FREQ_HZ, I2C_FREQ_HZ);
+#else
 Adafruit_SH1106G oled(128, 64, &Wire, -1, I2C_FREQ_HZ, I2C_FREQ_HZ);
+#endif
 bool oledOk = false;
 #endif
 
@@ -326,6 +436,10 @@ static const char *const PUMP_RT_NVS[PUMP_COUNT] = {"rt_main", "rt_a", "rt_b", "
 SensorState S = {};
 float phCalV7 = PH_CAL_V7_DEFAULT;
 float phCalV4 = PH_CAL_V4_DEFAULT;
+// bit0 = pH 7 point stored from a real buffer, bit1 = pH 4 point. pH is NEVER sent until both
+// points come from real buffers (the defaults are only a typical module curve, not this probe).
+uint8_t phCalMask = 0;
+#define PH_CAL_ALL 0x03
 
 // identity / secrets (fixed-size buffers, no String churn)
 char deviceId[33] = "";
@@ -419,6 +533,11 @@ uint32_t pendingActionAt = 0;
 bool sampActive = false;
 uint8_t sampCh = 0;
 uint8_t sampIdx = 0;
+// The TDS input (A1) is high-impedance: right after the mux switches to it the first conversions
+// read low and climb like an RC charge (measured 1.18 -> 1.82 V over 9 samples). Those settling
+// conversions are discarded (real readings, just not yet settled), then 9 samples are kept.
+#define ADS_TDS_SETTLE_SAMPLES 30
+uint8_t sampDiscard = 0;
 uint32_t sampConvStart = 0;
 float phSamples[ADS_SAMPLES];
 float tdsSamples[ADS_SAMPLES];
@@ -725,14 +844,18 @@ static void invalidateAdsSensors() {
 }
 
 static void finishAdsCycle(uint32_t now) {
-  // ---- pH ----
-  float spread;
+  // ---- floating-input check (see ADC_MIRROR_V) ----
+  float spread, tdsSpread0;
   float pinV = medianAndSpread(phSamples, ADS_SAMPLES, spread);
-  bool winOk = (pinV >= PH_PIN_MIN_V) && (pinV <= PH_PIN_MAX_V) && (spread <= ADC_MAX_SPREAD_V);
+  float tdsV0 = medianAndSpread(tdsSamples, ADS_SAMPLES, tdsSpread0);
+  bool mirrored = TDS_INSTALLED && fabsf(pinV - tdsV0) < ADC_MIRROR_V;
+
+  // ---- pH ----
+  bool winOk = !mirrored && (pinV >= PH_PIN_MIN_V) && (pinV <= PH_PIN_MAX_V) && (spread <= ADC_MAX_SPREAD_V);
   S.phVoltOk = winOk;
   S.phSensorV = pinV * PH_DIVIDER_RATIO;
   bool phValid = false;
-  if (winOk && fabsf(phCalV7 - phCalV4) >= PH_CAL_MIN_SPAN_V) {
+  if (winOk && phCalMask == PH_CAL_ALL && fabsf(phCalV7 - phCalV4) >= PH_CAL_MIN_SPAN_V) {
     float slope = (7.0f - 4.0f) / (phCalV7 - phCalV4);  // pH per volt
     float ph = 7.0f + (S.phSensorV - phCalV7) * slope;
     if (isfinite(ph) && ph >= 0.0f && ph <= 14.0f) {
@@ -746,7 +869,7 @@ static void finishAdsCycle(uint32_t now) {
   // ---- TDS / EC (DFRobot formula with temperature compensation) ----
   float tdsV = medianAndSpread(tdsSamples, ADS_SAMPLES, spread);
   if (tdsV < 0.0f && tdsV > -0.01f) tdsV = 0.0f;  // ADC offset around 0 V
-  bool tWin = (tdsV >= TDS_PIN_MIN_V) && (tdsV <= TDS_PIN_MAX_V) && (spread <= ADC_MAX_SPREAD_V);
+  bool tWin = TDS_INSTALLED && !mirrored && (tdsV >= TDS_PIN_MIN_V) && (tdsV <= TDS_PIN_MAX_V) && (spread <= ADC_MAX_SPREAD_V);
   bool ecValid = false;
   if (tWin) {
     // real temperature only; if DS18B20 is invalid use 25 C for compensation
@@ -766,6 +889,22 @@ static void finishAdsCycle(uint32_t now) {
   S.ecValid = ecValid;
   if (ecValid) S.ecTs = now;
   oledDirty = true;
+
+  // Serial-only diagnostics (raw measured volts, never sent to the cloud), every 10 s
+  static uint32_t lastDiagAt = 0;
+  if (now - lastDiagAt >= 10000) {
+    lastDiagAt = now;
+    float phSpread, tdsSpread;
+    float phPin = medianAndSpread(phSamples, ADS_SAMPLES, phSpread);
+    medianAndSpread(tdsSamples, ADS_SAMPLES, tdsSpread);
+    Serial.print("[ADC] A1 raw:");
+    for (int i = 0; i < ADS_SAMPLES; i++) Serial.printf(" %.3f", (double)tdsSamples[i]);
+    Serial.println();
+    Serial.printf("[ADC] pH A0=%.3fV spread=%.3fV -> %s | TDS A1=%.3fV spread=%.3fV -> %s\n", phPin, phSpread,
+                  phValid ? "OK" : mirrored ? "FLOATING(A0=A1)" : (phCalMask != PH_CAL_ALL && phPin >= PH_PIN_MIN_V && phPin <= PH_PIN_MAX_V && phSpread <= ADC_MAX_SPREAD_V) ? "UNCALIBRATED(hidden)" : (phPin < PH_PIN_MIN_V ? "LOW(no signal?)" : phPin > PH_PIN_MAX_V ? "HIGH(>3.25V)" : phSpread > ADC_MAX_SPREAD_V ? "NOISY" : "CAL/RANGE"),
+                  tdsV, tdsSpread,
+                  ecValid ? "OK" : !TDS_INSTALLED ? "NOT INSTALLED" : mirrored ? "FLOATING(A0=A1)" : tdsV < TDS_PIN_MIN_V ? "LOW(no probe?)" : (tdsV > TDS_PIN_MAX_V ? "HIGH(>2.4V)" : tdsSpread > ADC_MAX_SPREAD_V ? "NOISY" : "RANGE"));
+  }
 }
 
 void sensorTick(uint32_t now) {
@@ -774,7 +913,7 @@ void sensorTick(uint32_t now) {
     nextSensorCycleAt = now + SENSOR_CYCLE_MS;
 #if HAS_DS18B20
     if (!dsPending) {
-      tempSensors.requestTemperatures();  // non-blocking (setWaitForConversion(false))
+      dsStartConversion();  // non-blocking: result read DS18B20_CONV_MS later
       dsPending = true;
       dsRequestAt = now;
     }
@@ -803,13 +942,18 @@ void sensorTick(uint32_t now) {
       invalidateAdsSensors();
       Serial.println("[ADS1115] conversion failed - pH/EC omitted");
     } else if (r == 1) {
-      if (sampCh == ADS_CH_PH) phSamples[sampIdx] = v;
-      else tdsSamples[sampIdx] = v;
-      sampIdx++;
+      if (sampDiscard > 0) {
+        sampDiscard--;  // settling conversion, not stored
+      } else {
+        if (sampCh == ADS_CH_PH) phSamples[sampIdx] = v;
+        else tdsSamples[sampIdx] = v;
+        sampIdx++;
+      }
       if (sampIdx >= ADS_SAMPLES) {
         if (sampCh == ADS_CH_PH) {
           sampCh = ADS_CH_TDS;
           sampIdx = 0;
+          sampDiscard = ADS_TDS_SETTLE_SAMPLES;
         } else {
           sampActive = false;
           finishAdsCycle(now);
@@ -831,15 +975,24 @@ void sensorTick(uint32_t now) {
   // ---- DS18B20 result ----
   if (dsPending && (now - dsRequestAt) >= DS18B20_CONV_MS) {
     dsPending = false;
-    float t = tempSensors.getTempCByIndex(0);
-    bool valid = (t != DEVICE_DISCONNECTED_C) && (t != 85.0f) && isfinite(t) && t >= TEMP_MIN_VALID_C &&
-                 t <= TEMP_MAX_VALID_C;
+    float t = NAN;
+    const char *why = "";
+    bool readOk = dsReadTemp(t, why);
+    if (readOk && t == 85.0f) why = "85C POWER-ON VALUE";
+    bool valid = readOk && (t != 85.0f) && isfinite(t) && t >= TEMP_MIN_VALID_C && t <= TEMP_MAX_VALID_C;
+    if (readOk && !valid && why[0] == 'O') why = "OUT OF RANGE";
     if (valid) {
       S.temp = t;
       S.tempTs = now;
     }
     if (valid != S.tempValid) telemetryDirty = true;
     S.tempValid = valid;
+    static uint32_t lastDsDiagAt = 0;
+    if (now - lastDsDiagAt >= 10000) {
+      lastDsDiagAt = now;
+      if (valid) Serial.printf("[DS18B20] IO39 presence=%u -> OK %.2f C\n", (unsigned)dsPresent, (double)t);
+      else Serial.printf("[DS18B20] IO39 presence=%u -> %s (temp omitted)\n", (unsigned)dsPresent, why);
+    }
     oledDirty = true;
   }
 #endif
@@ -870,11 +1023,15 @@ static void loadCalibration() {
   cal.begin("calib", true);
   phCalV7 = cal.getFloat("ph_v7", PH_CAL_V7_DEFAULT);
   phCalV4 = cal.getFloat("ph_v4", PH_CAL_V4_DEFAULT);
+  phCalMask = cal.getUChar("ph_mask", 0);
   cal.end();
   if (!isfinite(phCalV7) || !isfinite(phCalV4) || fabsf(phCalV7 - phCalV4) < PH_CAL_MIN_SPAN_V) {
     phCalV7 = PH_CAL_V7_DEFAULT;
     phCalV4 = PH_CAL_V4_DEFAULT;
+    phCalMask = 0;
   }
+  Serial.printf("[CAL] pH calibration %s (v7=%.3f v4=%.3f mask=%u)\n", phCalMask == PH_CAL_ALL ? "DONE" : "NOT DONE - pH hidden",
+                (double)phCalV7, (double)phCalV4, (unsigned)phCalMask);
 }
 
 static void saveCalibration() {
@@ -882,6 +1039,7 @@ static void saveCalibration() {
   cal.begin("calib", false);
   cal.putFloat("ph_v7", phCalV7);
   cal.putFloat("ph_v4", phCalV4);
+  cal.putUChar("ph_mask", phCalMask);
   cal.end();
 }
 
@@ -1441,6 +1599,7 @@ static void handleRpc(const char *reqId, JsonDocument &doc) {
     if (fabsf(n7 - n4) < PH_CAL_MIN_SPAN_V) return rpcError(reqId, "CAL_SPAN_TOO_SMALL");
     phCalV7 = n7;
     phCalV4 = n4;
+    phCalMask |= (point == 7) ? 0x01 : 0x02;
     saveCalibration();
     char bv[12], b7[12], b4[12];
     fmt(bv, 12, v, 3);
@@ -1451,6 +1610,7 @@ static void handleRpc(const char *reqId, JsonDocument &doc) {
     r["voltage"] = serialized(bv);
     r["v7"] = serialized(b7);
     r["v4"] = serialized(b4);
+    r["calibrated"] = (phCalMask == PH_CAL_ALL);
     rpcSuccessDoc(reqId, r);
     Serial.printf("[CAL] pH%d stored at %.3f V\n", point, (double)v);
     return;
@@ -2424,26 +2584,40 @@ static void ologWipe() {
 // 18. OLED (pairing info, verify code, live status) - ASCII only
 // ------------------------------------------------------------------------------
 #if HAS_OLED
-static void oledQr(int x0, int y0) {
+// Full-screen pairing QR. The MAC is sent without ':' (the app accepts 12 hex digits),
+// which keeps a FARM-xx payload inside QR version 3 (29 modules) -> 2 px per module = 58 px.
+static void oledQr() {
 #if HAS_QR
+  char mac12[13];
+  size_t j = 0;
+  for (size_t i = 0; btMacStr[i] && j < 12; i++)
+    if (btMacStr[i] != ':') mac12[j++] = btMacStr[i];
+  mac12[j] = 0;
   char payload[96];
-  snprintf(payload, sizeof(payload), "{\"d\":\"%s\",\"c\":\"%s\",\"m\":\"%s\"}", deviceId, claimSecret, btMacStr);
+  snprintf(payload, sizeof(payload), "{\"d\":\"%s\",\"c\":\"%s\",\"m\":\"%s\"}", deviceId, claimSecret, mac12);
   QRCode qr;
   uint8_t buf[qrcode_getBufferSize(4)];
-  if (qrcode_initText(&qr, buf, 4, ECC_LOW, payload) != 0) return;  // payload too long for v4
-  const int quiet = 4;
-  const int size = qr.size + quiet * 2;  // 33 + 8 = 41 px at 1 px/module
-  oled.fillRect(x0, y0, size, size, SH110X_WHITE);
+  int scale = 2;
+  if (qrcode_initText(&qr, buf, 3, ECC_LOW, payload) != 0) {
+    scale = 1;  // longer device name: version 4 (33 modules) only fits at 1 px/module
+    if (qrcode_initText(&qr, buf, 4, ECC_LOW, payload) != 0) return;
+  }
+  const int px = qr.size * scale;
+  const int side = 64;                 // white square = quiet zone around the code
+  const int bx = (128 - side) / 2;
+  const int x0 = bx + (side - px) / 2;
+  const int y0 = (side - px) / 2;
+  oled.fillRect(bx, 0, side, side, OLED_WHITE);
   for (uint8_t y = 0; y < qr.size; y++)
     for (uint8_t x = 0; x < qr.size; x++)
-      if (qrcode_getModule(&qr, x, y)) oled.drawPixel(x0 + quiet + x, y0 + quiet + y, SH110X_BLACK);
+      if (qrcode_getModule(&qr, x, y)) oled.fillRect(x0 + x * scale, y0 + y * scale, scale, scale, OLED_BLACK);
 #endif
 }
 
 static void drawOled(uint32_t now) {
   if (!oledOk) return;
   oled.clearDisplay();
-  oled.setTextColor(SH110X_WHITE);
+  oled.setTextColor(OLED_WHITE);
   oled.setTextSize(1);
 
   uint32_t held = btnPressStart ? now - btnPressStart : 0;
@@ -2473,31 +2647,16 @@ static void drawOled(uint32_t now) {
   }
 
   if (isPairingWindowOpen) {
-    uint32_t el = now - pairingWindowStart;
-    uint32_t remain = el < PAIRING_WINDOW_MS ? (PAIRING_WINDOW_MS - el) / 1000 : 0;
 #if HAS_QR
-    oledQr(0, 11);
-    const int tx = 44;
+    oledQr();  // QR only, no text
 #else
-    const int tx = 0;
-#endif
     oled.setCursor(0, 0);
-    oled.print(offlinePairing ? "WIFI LOST: PAIR" : isBound ? "PAIRING (bound)" : "PAIRING MODE");
-    oled.setCursor(tx, 12);
+    oled.print("PAIRING MODE");
+    oled.setCursor(0, 16);
     oled.print(deviceId);
-    oled.setCursor(tx, 24);
-    oled.print("Claim code:");
-    oled.setCursor(tx, 34);
+    oled.setCursor(0, 32);
     oled.print(claimSecret);
-    oled.setCursor(tx, 46);
-    if (authLockActive(now)) oled.print("LOCKED 5min");
-    else if (wifiTesting) oled.print("WiFi test...");
-    else if (bleWifiError[0]) oled.print("WiFi FAILED");
-    else oled.print(bleConnected ? "BLE linked" : "BLE ready");
-    oled.setCursor(tx, 56);
-    if (offlinePairing) oled.print("until WiFi back");
-    else if (isBound) oled.printf("%02lu:%02lu left", (unsigned long)(remain / 60), (unsigned long)(remain % 60));
-    else oled.print("always on");
+#endif
     oled.display();
     return;
   }
@@ -2748,11 +2907,15 @@ void setup() {
 #if HAS_OLED
   Wire.beginTransmission(OLED_ADDR);
   bool oledAck = Wire.endTransmission() == 0;
+#if OLED_IS_SSD1306
+  oledOk = oledAck && oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR, true, false);  // Wire already started
+#else
   oledOk = oledAck && oled.begin(OLED_ADDR, true);
+#endif
   Serial.printf("[I2C] OLED 0x3C %s\n", oledOk ? "found" : "NOT FOUND (running without display)");
   if (oledOk) {
     oled.clearDisplay();
-    oled.setTextColor(SH110X_WHITE);
+    oled.setTextColor(OLED_WHITE);
     oled.setTextSize(1);
     oled.setCursor(0, 0);
     oled.println("Smart Water Farm");
@@ -2763,10 +2926,8 @@ void setup() {
 #endif
 
 #if HAS_DS18B20
-  tempSensors.begin();
-  tempSensors.setResolution(12);
-  tempSensors.setWaitForConversion(false);
-  Serial.printf("[DS18B20] %u device(s) on IO39\n", tempSensors.getDeviceCount());
+  owInit();
+  Serial.printf("[DS18B20] IO39 presence at boot = %u\n", (unsigned)owReset());
 #endif
 
   setupBle();

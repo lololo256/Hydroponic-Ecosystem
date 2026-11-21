@@ -1,0 +1,3 @@
+
+# firmware secrets (device token) - never commit
+**/secrets.h
