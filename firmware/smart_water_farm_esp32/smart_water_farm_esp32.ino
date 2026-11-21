@@ -885,7 +885,9 @@ static void finishAdsCycle(uint32_t now) {
   S.phVoltOk = winOk;
   S.phSensorV = pinV * PH_DIVIDER_RATIO;
   bool phValid = false;
-  if (winOk && phCalMask == PH_CAL_ALL && fabsf(phCalV7 - phCalV4) >= PH_CAL_MIN_SPAN_V) {
+  // 2026-11-21 (owner's decision): pH is sent even before a 2-point buffer calibration. Until then it
+  // uses the PH_CAL_V7/V4_DEFAULT module curve, which may not match this probe (see [CAL] on Serial).
+  if (winOk && fabsf(phCalV7 - phCalV4) >= PH_CAL_MIN_SPAN_V) {
     float slope = (7.0f - 4.0f) / (phCalV7 - phCalV4);  // pH per volt
     float ph = 7.0f + (S.phSensorV - phCalV7) * slope;
     if (isfinite(ph) && ph >= 0.0f && ph <= 14.0f) {
@@ -927,11 +929,12 @@ static void finishAdsCycle(uint32_t now) {
     float phSpread, tdsSpread;
     float phPin = medianAndSpread(phSamples, ADS_SAMPLES, phSpread);
     medianAndSpread(tdsSamples, ADS_SAMPLES, tdsSpread);
+    if (phValid) Serial.printf("[ADC] pH = %.2f%s\n", (double)S.ph, phCalMask == PH_CAL_ALL ? "" : " (not calibrated)");
     Serial.print("[ADC] A1 raw:");
     for (int i = 0; i < ADS_SAMPLES; i++) Serial.printf(" %.3f", (double)tdsSamples[i]);
     Serial.println();
     Serial.printf("[ADC] pH A0=%.3fV spread=%.3fV -> %s | TDS A1=%.3fV spread=%.3fV -> %s\n", phPin, phSpread,
-                  phValid ? "OK" : mirrored ? "FLOATING(A0=A1)" : (phCalMask != PH_CAL_ALL && phPin >= PH_PIN_MIN_V && phPin <= PH_PIN_MAX_V && phSpread <= ADC_MAX_SPREAD_V) ? "UNCALIBRATED(hidden)" : (phPin < PH_PIN_MIN_V ? "LOW(no signal?)" : phPin > PH_PIN_MAX_V ? "HIGH(>3.25V)" : phSpread > ADC_MAX_SPREAD_V ? "NOISY" : "CAL/RANGE"),
+                  phValid ? (phCalMask == PH_CAL_ALL ? "OK" : "OK(default curve, not calibrated)") : mirrored ? "FLOATING(A0=A1)" : (phPin < PH_PIN_MIN_V ? "LOW(no signal?)" : phPin > PH_PIN_MAX_V ? "HIGH(>3.25V)" : phSpread > ADC_MAX_SPREAD_V ? "NOISY" : "CAL/RANGE"),
                   tdsV, tdsSpread,
                   ecValid ? "OK" : !TDS_INSTALLED ? "NOT INSTALLED" : mirrored ? "FLOATING(A0=A1)" : tdsV < TDS_PIN_MIN_V ? "LOW(no probe?)" : (tdsV > TDS_PIN_MAX_V ? "HIGH(>2.4V)" : tdsSpread > ADC_MAX_SPREAD_V ? "NOISY" : "RANGE"));
   }
@@ -1060,7 +1063,7 @@ static void loadCalibration() {
     phCalV4 = PH_CAL_V4_DEFAULT;
     phCalMask = 0;
   }
-  Serial.printf("[CAL] pH calibration %s (v7=%.3f v4=%.3f mask=%u)\n", phCalMask == PH_CAL_ALL ? "DONE" : "NOT DONE - pH hidden",
+  Serial.printf("[CAL] pH calibration %s (v7=%.3f v4=%.3f mask=%u)\n", phCalMask == PH_CAL_ALL ? "DONE" : "NOT DONE - pH uses the default module curve",
                 (double)phCalV7, (double)phCalV4, (unsigned)phCalMask);
 }
 
